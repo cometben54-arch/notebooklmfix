@@ -6,14 +6,13 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "pages:dev": "npx wrangler pages dev dist --kv=NOTEBOOKLM_KV --r2=R2_BUCKET",
+    "pages:deploy": "npm run build && npx wrangler pages deploy dist"
   },
   "dependencies": {
-    "@aws-sdk/client-s3": "^3.958.0",
-    "@aws-sdk/s3-request-presigner": "^3.958.0",
     "@google/genai": "^1.34.0",
     "@types/file-saver": "^2.0.7",
-    "@vercel/kv": "^3.0.0",
     "dexie": "^4.2.1",
     "dexie-react-hooks": "^4.2.0",
     "file-saver": "^2.0.5",
@@ -26,6 +25,8 @@
     "react-dom": "^19.2.3"
   },
   "devDependencies": {
+    "@cloudflare/workers-types": "^4.20241205.0",
+    "wrangler": "^3.99.0",
     "@testing-library/jest-dom": "^6.9.1",
     "@testing-library/react": "^16.3.1",
     "@types/node": "^22.14.0",

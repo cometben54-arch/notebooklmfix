@@ -59,6 +59,7 @@ const App: React.FC = () => {
     quota,
     setQuota,
     handleSaveLocalKey,
+    handleSaveApiConfig,
     handleSelectKey,
     verifyKey
   } = useAuth();
@@ -548,6 +549,10 @@ const App: React.FC = () => {
         onClose={() => setIsKeyModalOpen(false)}
         onSave={(key, newQuota) => {
           handleSaveLocalKey(key, newQuota);
+          setIsKeyModalOpen(false);
+        }}
+        onSaveApiConfig={(config) => {
+          handleSaveApiConfig(config);
           setIsKeyModalOpen(false);
         }}
         lang={lang}

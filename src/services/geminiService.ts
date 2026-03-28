@@ -1,6 +1,7 @@
 import { GoogleGenAI } from "@google/genai";
 
 import { SYSTEM_PROMPT, USER_PROMPT } from '../constants/prompts';
+import { QuotaInfo, ApiProviderConfig } from '../types';
 
 // Helper to calculate closest aspect ratio supported by Gemini 3 Pro Image
 // Supported: "1:1", "3:4", "4:3", "9:16", "16:9"
@@ -14,7 +15,6 @@ const getClosestAspectRatio = (width: number, height: number): string => {
     { label: "16:9", value: 1.77 },
   ];
 
-  // Find the one with minimum difference
   const closest = supported.reduce((prev, curr) => {
     return Math.abs(curr.value - ratio) < Math.abs(prev.value - ratio) ? curr : prev;
   });
@@ -22,17 +22,38 @@ const getClosestAspectRatio = (width: number, height: number): string => {
   return closest.label;
 };
 
+// --- Load API Config from localStorage ---
+const getApiConfig = (): ApiProviderConfig | null => {
+  const saved = localStorage.getItem('api_provider_config');
+  if (saved) {
+    try {
+      return JSON.parse(saved);
+    } catch {
+      return null;
+    }
+  }
+  // Backward compatibility: check for old-style key
+  const oldKey = localStorage.getItem('gemini_api_key_local');
+  if (oldKey) {
+    return {
+      provider: 'google-gemini',
+      apiKey: oldKey,
+      model: 'gemini-3-pro-image-preview',
+    };
+  }
+  return null;
+};
+
 export const checkApiKeySelection = async (): Promise<boolean> => {
   if (typeof window.aistudio !== 'undefined' && window.aistudio.hasSelectedApiKey) {
     return await window.aistudio.hasSelectedApiKey();
   }
-  // Check Local Storage for API Key
+  // Check for new config format
+  if (localStorage.getItem('api_provider_config')) return true;
+  // Check legacy key
   if (localStorage.getItem('gemini_api_key_local')) return true;
-
-  // Check Local Storage for Access Code (Commercial Mode)
+  // Check Access Code (Passcode Mode)
   if (localStorage.getItem('gemini_access_code')) return true;
-
-  // Security: Do NOT check process.env.GEMINI_API_KEY on client side
   return false;
 };
 
@@ -44,8 +65,167 @@ export const promptForKeySelection = async (): Promise<void> => {
   }
 };
 
-import { QuotaInfo } from '../types';
+// --- Compress image for proxy mode ---
+const compressImage = (base64: string): Promise<string> => {
+  return new Promise((resolve) => {
+    const img = new Image();
+    img.onload = () => {
+      const canvas = document.createElement('canvas');
+      const MAX_DIM = 1280;
+      let w = img.width;
+      let h = img.height;
+      if (w > MAX_DIM || h > MAX_DIM) {
+        if (w > h) { h = Math.round((h * MAX_DIM) / w); w = MAX_DIM; }
+        else { w = Math.round((w * MAX_DIM) / h); h = MAX_DIM; }
+      }
+      canvas.width = w;
+      canvas.height = h;
+      const ctx = canvas.getContext('2d');
+      if (ctx) {
+        ctx.fillStyle = '#FFFFFF';
+        ctx.fillRect(0, 0, w, h);
+        ctx.imageSmoothingEnabled = true;
+        ctx.imageSmoothingQuality = 'high';
+        ctx.drawImage(img, 0, 0, w, h);
+        resolve(canvas.toDataURL('image/jpeg', 0.7).replace(/^data:image\/jpeg;base64,/, ""));
+      } else {
+        resolve(base64);
+      }
+    };
+    img.onerror = () => resolve(base64);
+    img.src = `data:image/png;base64,${base64}`;
+  });
+};
 
+// --- Google Gemini direct call ---
+const callGemini = async (
+  config: ApiProviderConfig,
+  cleanBase64: string,
+  aspectRatio: string,
+  imageSize: '2K' | '4K'
+): Promise<string> => {
+  const ai = new GoogleGenAI({ apiKey: config.apiKey });
+
+  const response = await ai.models.generateContent({
+    model: config.model || 'gemini-3-pro-image-preview',
+    contents: {
+      parts: [
+        { text: USER_PROMPT },
+        { inlineData: { mimeType: 'image/png', data: cleanBase64 } },
+      ],
+    },
+    config: {
+      systemInstruction: SYSTEM_PROMPT,
+      imageConfig: {
+        aspectRatio: aspectRatio,
+        imageSize: imageSize,
+      }
+    },
+  });
+
+  if (response.candidates && response.candidates[0].content && response.candidates[0].content.parts) {
+    for (const part of response.candidates[0].content.parts) {
+      if (part.inlineData && part.inlineData.data) {
+        return `data:image/png;base64,${part.inlineData.data}`;
+      }
+    }
+  }
+  throw new Error("No image generated in Gemini response");
+};
+
+// --- OpenAI-compatible API call ---
+const callOpenAICompatible = async (
+  config: ApiProviderConfig,
+  cleanBase64: string,
+  imageSize: '2K' | '4K'
+): Promise<string> => {
+  const baseUrl = (config.baseUrl || 'https://api.openai.com').replace(/\/+$/, '');
+  const model = config.model || 'gpt-image-1';
+
+  // Use Images API for image generation models
+  const isImageModel = model.includes('dall-e') || model.includes('gpt-image');
+
+  if (isImageModel) {
+    // OpenAI Images Edit API
+    const size = imageSize === '4K' ? '1536x1024' : '1024x1024';
+    const response = await fetch(`${baseUrl}/v1/images/edits`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${config.apiKey}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        model: model,
+        image: `data:image/png;base64,${cleanBase64}`,
+        prompt: `${SYSTEM_PROMPT}\n${USER_PROMPT}`,
+        n: 1,
+        size: size,
+        response_format: 'b64_json',
+      }),
+    });
+
+    if (!response.ok) {
+      const err = await response.text();
+      throw new Error(`OpenAI API Error: ${response.status} - ${err}`);
+    }
+
+    const data: any = await response.json();
+    if (data.data && data.data[0]) {
+      if (data.data[0].b64_json) {
+        return `data:image/png;base64,${data.data[0].b64_json}`;
+      }
+      if (data.data[0].url) {
+        // Fetch the image from URL
+        const imgRes = await fetch(data.data[0].url);
+        const blob = await imgRes.blob();
+        return await new Promise((resolve) => {
+          const reader = new FileReader();
+          reader.onloadend = () => resolve(reader.result as string);
+          reader.readAsDataURL(blob);
+        });
+      }
+    }
+    throw new Error("No image in OpenAI response");
+  } else {
+    // Chat Completions API with vision (for models like gpt-4o)
+    const response = await fetch(`${baseUrl}/v1/chat/completions`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${config.apiKey}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        model: model,
+        messages: [
+          { role: 'system', content: SYSTEM_PROMPT },
+          {
+            role: 'user',
+            content: [
+              { type: 'text', text: USER_PROMPT },
+              { type: 'image_url', image_url: { url: `data:image/png;base64,${cleanBase64}` } },
+            ],
+          },
+        ],
+        max_tokens: 4096,
+      }),
+    });
+
+    if (!response.ok) {
+      const err = await response.text();
+      throw new Error(`API Error: ${response.status} - ${err}`);
+    }
+
+    const data: any = await response.json();
+    // Try to extract image from response
+    const content = data.choices?.[0]?.message?.content;
+    if (content && content.startsWith('data:image')) {
+      return content;
+    }
+    throw new Error("No image generated. This model may not support image generation.");
+  }
+};
+
+// --- Main Processing Function ---
 export const processImageWithGemini = async (
   base64Image: string,
   width: number,
@@ -59,70 +239,13 @@ export const processImageWithGemini = async (
   let cleanBase64 = base64Image.replace(/^data:image\/(png|jpeg|jpg|webp);base64,/, "");
 
   if (accessCode) {
-    // PROXY MODE - MANDATORY COMPRESSION FOR VERCEL (Hard Limit 4.5MB)
-    // We strictly resize ALL images to max 1280px to ensure payload is tiny (<1MB).
-    // This is necessary because Vercel Free Tier rejects anything > 4.5MB immediately.
-    // NOTE: This does NOT affect the output quality, only the reference image sent to AI.
+    // --- PROXY MODE (Passcode) ---
     try {
-      console.log("Proxy Mode: Force compressing image to safe limit (Max 1280px)...");
-
-      const compressImage = (base64: string): Promise<string> => {
-        return new Promise((resolve) => {
-          const img = new Image();
-          img.onload = () => {
-            const canvas = document.createElement('canvas');
-
-            // Force Resize to Max 1280px (Safe & Fast)
-            const MAX_DIM = 1280;
-            let width = img.width;
-            let height = img.height;
-
-            // Resize logic: Maintain aspect ratio
-            if (width > MAX_DIM || height > MAX_DIM) {
-              if (width > height) {
-                height = Math.round((height * MAX_DIM) / width);
-                width = MAX_DIM;
-              } else {
-                width = Math.round((width * MAX_DIM) / height);
-                height = MAX_DIM;
-              }
-            }
-
-            canvas.width = width;
-            canvas.height = height;
-
-            const ctx = canvas.getContext('2d');
-            if (ctx) {
-              // 1. Fill White Background (Critical for transparent PNGs -> JPEG)
-              // Without this, transparent areas turn black in JPEG
-              ctx.fillStyle = '#FFFFFF';
-              ctx.fillRect(0, 0, width, height);
-
-              // 2. High quality downscaling
-              ctx.imageSmoothingEnabled = true;
-              ctx.imageSmoothingQuality = 'high';
-              ctx.drawImage(img, 0, 0, width, height);
-              // JPEG 0.7 is perfect for AI reference (small size, good details)
-              resolve(canvas.toDataURL('image/jpeg', 0.7).replace(/^data:image\/jpeg;base64,/, ""));
-            } else {
-              // Canvas context failed? Return original (Should not happen)
-              resolve(base64);
-            }
-          };
-          img.onerror = (e) => {
-            console.warn("Image load failed during compression, using original", e);
-            resolve(base64);
-          };
-          img.src = `data:image/png;base64,${base64}`;
-        });
-      };
-
+      console.log("Proxy Mode: Compressing image...");
       cleanBase64 = await compressImage(cleanBase64);
-      const newSize = (cleanBase64.length * 0.75) / (1024 * 1024);
-      console.log(`Payload ready: ${newSize.toFixed(2)}MB`);
-
+      console.log(`Payload: ${(cleanBase64.length * 0.75 / (1024 * 1024)).toFixed(2)}MB`);
     } catch (e) {
-      console.warn("Compression routine failed, sending original", e);
+      console.warn("Compression failed, using original", e);
     }
 
     try {
@@ -144,19 +267,15 @@ export const processImageWithGemini = async (
       }
 
       const data = await response.json();
-      // Extract image from response validation (Hybrid: R2 URL or Base64)
       let imageStr = '';
       if (data.candidates && data.candidates[0].content && data.candidates[0].content.parts) {
         for (const part of data.candidates[0].content.parts) {
-          // Case 1: Standard Base64 (Small Images)
           if (part.inlineData && part.inlineData.data) {
             imageStr = `data:image/png;base64,${part.inlineData.data}`;
             break;
           }
-          // Case 2: R2 Signed URL (Large Images)
           if (part.imageUrl) {
             try {
-              console.log("Fetching large image from R2...", part.imageUrl);
               const r2Res = await fetch(part.imageUrl);
               const blob = await r2Res.blob();
               const reader = new FileReader();
@@ -166,7 +285,6 @@ export const processImageWithGemini = async (
               });
               break;
             } catch (fetchErr) {
-              console.error("Failed to fetch image from R2", fetchErr);
               throw new Error("Failed to download large image");
             }
           }
@@ -174,66 +292,42 @@ export const processImageWithGemini = async (
       }
 
       if (!imageStr) throw new Error("No image in proxy response");
-
       return { image: imageStr, quota: data.quota };
-
     } catch (e) {
       console.error("Proxy Request Failed", e);
       throw e;
     }
   }
 
-  // --- STANDARD MODE (Direct API Key) ---
-  // --- STANDARD MODE (Direct API Key) ---
-  // Priority: 1. Google Project IDX (injected) 2. Local Storage
-  const localKey = localStorage.getItem('gemini_api_key_local');
-
-  if (!localKey) {
+  // --- DIRECT MODE (User's API Key) ---
+  const apiConfig = getApiConfig();
+  if (!apiConfig) {
     throw new Error("No API Key found. Please configure your key in settings.");
   }
 
-  const apiKeyToUse = localKey;
-
-  const ai = new GoogleGenAI({ apiKey: apiKeyToUse });
   const aspectRatio = getClosestAspectRatio(width, height);
 
   try {
-    const response = await ai.models.generateContent({
-      model: 'gemini-3-pro-image-preview', // Mapped from "nano banana pro"
-      contents: {
-        parts: [
-          {
-            text: USER_PROMPT,
-          },
-          {
-            inlineData: {
-              mimeType: 'image/png',
-              data: cleanBase64,
-            },
-          },
-        ],
-      },
-      config: {
-        systemInstruction: SYSTEM_PROMPT,
-        imageConfig: {
-          aspectRatio: aspectRatio,
-          imageSize: imageSize,
-        }
-      },
-    });
+    let imageResult: string;
 
-    // Extract image from response
-    if (response.candidates && response.candidates[0].content && response.candidates[0].content.parts) {
-      for (const part of response.candidates[0].content.parts) {
-        if (part.inlineData && part.inlineData.data) {
-          return { image: `data:image/png;base64,${part.inlineData.data}` };
-        }
-      }
+    switch (apiConfig.provider) {
+      case 'google-gemini':
+        imageResult = await callGemini(apiConfig, cleanBase64, aspectRatio, imageSize);
+        break;
+      case 'openai-compatible':
+        imageResult = await callOpenAICompatible(apiConfig, cleanBase64, imageSize);
+        break;
+      case 'custom':
+        // Custom provider uses same format as OpenAI-compatible
+        imageResult = await callOpenAICompatible(apiConfig, cleanBase64, imageSize);
+        break;
+      default:
+        throw new Error(`Unknown provider: ${apiConfig.provider}`);
     }
 
-    throw new Error("No image generated in response");
+    return { image: imageResult };
   } catch (error) {
-    console.error("Gemini API Error:", error);
+    console.error("API Error:", error);
     throw error;
   }
 };

@@ -60,6 +60,23 @@ type TranslationKeys = {
     wechat: string;
     tip: string;
 
+    // API Config Modal - New
+    configApiBtn: string;
+    providerLabel: string;
+    providerGemini: string;
+    providerOpenAI: string;
+    providerCustom: string;
+    apiKeyLabel: string;
+    modelLabel: string;
+    endpointLabel: string;
+    endpointPlaceholder: string;
+    modelPlaceholder: string;
+    tabApiKey: string;
+    tabPasscode: string;
+    configSaved: string;
+    testConnection: string;
+    testing: string;
+
     // Footer
     copyright: string;
     builtBy: string;
@@ -93,7 +110,7 @@ export const TRANSLATIONS: Record<Language, TranslationKeys> = {
         page: "Page",
         keyGuideTitle: "API Key Required",
         keyGuideDesc: "To process high-resolution images with Nano Banana Pro, you must select a Google Cloud project associated with billing.",
-        connectBtn: "Connect API Key",
+        connectBtn: "Configure API",
         res2k: "2K",
         res4k: "4K",
         highCost: "Uses more tokens",
@@ -114,8 +131,8 @@ export const TRANSLATIONS: Record<Language, TranslationKeys> = {
 
         // ApiKeyModal
         keyModalTitle: 'Configure API',
-        keyModalDesc: 'Enter Key or Passcode to start',
-        keyInputPlaceholder: 'Enter sk-xxxx (Key) or Passcode...',
+        keyModalDesc: 'Choose your AI provider and model',
+        keyInputPlaceholder: 'Enter API Key...',
         invalidCode: 'Invalid Passcode',
         networkError: 'Network Error',
         verifying: 'Verifying...',
@@ -130,6 +147,23 @@ export const TRANSLATIONS: Record<Language, TranslationKeys> = {
         contactMe: 'Contact to buy:',
         wechat: '微信',
         tip: '* For 4K Upscaling & Text Repair, please purchase a Passcode from the author.',
+
+        // API Config - New
+        configApiBtn: 'Configure API',
+        providerLabel: 'Provider',
+        providerGemini: 'Google Gemini',
+        providerOpenAI: 'OpenAI Compatible',
+        providerCustom: 'Custom Endpoint',
+        apiKeyLabel: 'API Key',
+        modelLabel: 'Model',
+        endpointLabel: 'API Endpoint',
+        endpointPlaceholder: 'https://api.openai.com',
+        modelPlaceholder: 'Enter model name...',
+        tabApiKey: 'API Key',
+        tabPasscode: 'Passcode',
+        configSaved: 'Configuration saved!',
+        testConnection: 'Test',
+        testing: 'Testing...',
 
         // Footer
         copyright: "© 2026 NotebookLM Fixer.",
@@ -160,9 +194,9 @@ export const TRANSLATIONS: Record<Language, TranslationKeys> = {
         holdToView: "长按对比原图",
         clickToView: "点击查看大图对比",
         page: "页",
-        keyGuideTitle: "需配置 API 密钥",
-        keyGuideDesc: "为了使用 Nano Banana Pro 处理高分辨率图像，您需要选择一个关联了计费的 Google Cloud 项目。",
-        connectBtn: "连接 API 密钥",
+        keyGuideTitle: "需配置 API",
+        keyGuideDesc: "使用前请先配置 AI 模型的 API 密钥，支持 Google Gemini、OpenAI 等多种模型。",
+        connectBtn: "配置 API",
         res2k: "2K (快速)",
         res4k: "4K (极致)",
         highCost: "消耗更多 Token",
@@ -183,8 +217,8 @@ export const TRANSLATIONS: Record<Language, TranslationKeys> = {
 
         // ApiKeyModal
         keyModalTitle: '配置 API',
-        keyModalDesc: '输入密钥或口令以开始增强',
-        keyInputPlaceholder: '输入 sk-xxxx (Key) 或 口令...',
+        keyModalDesc: '选择 AI 服务商和模型',
+        keyInputPlaceholder: '输入 API Key...',
         invalidCode: '无效的口令 (Invalid Passcode)',
         networkError: '验证失败，请检查网络',
         verifying: '验证中...',
@@ -199,6 +233,23 @@ export const TRANSLATIONS: Record<Language, TranslationKeys> = {
         contactMe: '联系购买:',
         wechat: '微信',
         tip: '* 4K 高清修复以及文字修复，请联系作者购买口令。',
+
+        // API Config - New
+        configApiBtn: '配置 API',
+        providerLabel: '服务商',
+        providerGemini: 'Google Gemini',
+        providerOpenAI: 'OpenAI 兼容',
+        providerCustom: '自定义接口',
+        apiKeyLabel: 'API 密钥',
+        modelLabel: '模型',
+        endpointLabel: 'API 端点',
+        endpointPlaceholder: 'https://api.openai.com',
+        modelPlaceholder: '输入模型名称...',
+        tabApiKey: 'API 密钥',
+        tabPasscode: '口令',
+        configSaved: '配置已保存！',
+        testConnection: '测试',
+        testing: '测试中...',
 
         // Footer
         copyright: "© 2026 NotebookLM Fixer.",

@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import { QuotaInfo } from '../types';
+import { QuotaInfo, ApiProviderConfig } from '../types';
 import { checkApiKeySelection, promptForKeySelection, validateAccessCode } from '../services/geminiService';
 
 export type AuthMode = 'key' | 'passcode';
@@ -7,9 +7,12 @@ export type AuthMode = 'key' | 'passcode';
 export function useAuth() {
     // 1. Synchronous Initialization (Fixes FOUC)
     const [keyAuthorized, setKeyAuthorized] = useState(() => {
-        // Guard for SSR
         if (typeof window === 'undefined') return false;
-        return !!(localStorage.getItem('gemini_api_key_local') || localStorage.getItem('gemini_access_code'));
+        return !!(
+            localStorage.getItem('api_provider_config') ||
+            localStorage.getItem('gemini_api_key_local') ||
+            localStorage.getItem('gemini_access_code')
+        );
     });
 
     const [authMode, setAuthMode] = useState<AuthMode>(() => {
@@ -32,12 +35,24 @@ export function useAuth() {
             setQuota(newQuota);
             setAuthMode('passcode');
         } else {
-            // API Key Mode
-            localStorage.setItem('gemini_api_key_local', key);
-            localStorage.removeItem('gemini_access_code'); // Clear access code if switching to key
+            // API Key Mode - clear access code if switching
+            localStorage.removeItem('gemini_access_code');
             setQuota(null);
             setAuthMode('key');
         }
+        setKeyAuthorized(true);
+    }, []);
+
+    // Save provider config (new multi-provider)
+    const handleSaveApiConfig = useCallback((config: ApiProviderConfig) => {
+        localStorage.setItem('api_provider_config', JSON.stringify(config));
+        // Also save as legacy key for backward compat
+        if (config.provider === 'google-gemini') {
+            localStorage.setItem('gemini_api_key_local', config.apiKey);
+        }
+        localStorage.removeItem('gemini_access_code');
+        setQuota(null);
+        setAuthMode('key');
         setKeyAuthorized(true);
     }, []);
 
@@ -54,11 +69,11 @@ export function useAuth() {
 
     // Sync from other tabs
     const handleStorageChange = useCallback((e: StorageEvent) => {
-        if (e.key === 'gemini_api_key_local' || e.key === 'gemini_access_code') {
+        if (e.key === 'api_provider_config' || e.key === 'gemini_api_key_local' || e.key === 'gemini_access_code') {
             verifyKey();
             if (e.key === 'gemini_access_code' && e.newValue) {
                 setAuthMode('passcode');
-            } else if (e.key === 'gemini_api_key_local' && e.newValue) {
+            } else {
                 setAuthMode('key');
             }
         }
@@ -71,13 +86,8 @@ export function useAuth() {
     useEffect(() => {
         const savedCode = localStorage.getItem('gemini_access_code');
         if (savedCode) {
-            // Re-validate with server to get fresh quota
-            // Using static import for robustness
-            // NOTE: This call must succeed. If it fails (e.g. backend code not deployed), 
-            // quota will just remain cached.
             validateAccessCode(savedCode).then(result => {
                 if (result.valid && result.quota) {
-                    console.log("[Auto-Sync] Quota updated:", result.quota);
                     setQuota(result.quota);
                     setKeyAuthorized(true);
                     localStorage.setItem('gemini_quota_cache', JSON.stringify(result.quota));
@@ -86,14 +96,12 @@ export function useAuth() {
                 }
             });
         } else {
-            // If no passcode, check key (legacy logic)
-            // But strict init above covers us, verifyKey effectively double checks.
             verifyKey();
         }
 
         window.addEventListener('storage', handleStorageChange);
         return () => window.removeEventListener('storage', handleStorageChange);
-    }, []); // Run once on mount
+    }, []);
 
     return {
         keyAuthorized,
@@ -101,6 +109,7 @@ export function useAuth() {
         quota,
         setQuota,
         handleSaveLocalKey,
+        handleSaveApiConfig,
         handleSelectKey,
         verifyKey
     };
