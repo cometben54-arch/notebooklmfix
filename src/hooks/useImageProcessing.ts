@@ -43,12 +43,8 @@ export function useImageProcessing({
     const [showErrorToast, setShowErrorToast] = useState(false);
     const [errorToastMessage, setErrorToastMessage] = useState('');
 
-    // Auto-switch to 4K for Passcode Mode
-    useEffect(() => {
-        if (authMode === 'passcode') {
-            setResolution('4K');
-        }
-    }, [authMode]);
+    // Default to 2K, user can freely switch to 4K
+
 
     const abortRef = useRef(false);
 

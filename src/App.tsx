@@ -6,7 +6,6 @@ import {
   Zap,
   AlertCircle
 } from 'lucide-react';
-import { Testimonial } from './components/ui/Testimonial';
 
 // Hooks
 import { useAuth } from './hooks/useAuth';
@@ -426,10 +425,6 @@ const App: React.FC = () => {
               </div>
             </div>
 
-            {/* Social Proof (Testimonial) */}
-            <div className="mt-8 mb-12">
-              <Testimonial lang={lang} />
-            </div>
           </div>
         )}
 

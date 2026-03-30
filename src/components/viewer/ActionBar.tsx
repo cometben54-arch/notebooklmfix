@@ -6,7 +6,6 @@ import {
     FileText,
     Presentation,
     Zap,
-    Lock,
     Download
 } from 'lucide-react';
 import { ProcessedPage } from '../../types';
@@ -107,36 +106,17 @@ export const ActionBar: React.FC<ActionBarProps> = ({
                         </button>
                         <div className="w-px h-4 bg-zinc-200 dark:bg-white/10 mx-1"></div>
                         <button
-                            onClick={() => {
-                                if (authMode === 'key') {
-                                    // Key 用户点击 4K 按钮时，打开 Modal 引导购买口令
-                                    setIsKeyModalOpen(true);
-                                } else {
-                                    setResolution('4K');
-                                }
-                            }}
-                            className={`group/4k relative px-3 py-1.5 rounded-lg text-xs font-medium transition-all flex items-center gap-1.5 ${authMode === 'key'
-                                ? 'text-zinc-300 dark:text-zinc-600 cursor-pointer hover:text-amber-500 dark:hover:text-amber-400'
-                                : resolution === '4K'
-                                    ? 'bg-indigo-500 text-white shadow-sm shadow-indigo-500/30'
-                                    : 'text-zinc-500 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-200'
+                            onClick={() => setResolution('4K')}
+                            className={`group/4k relative px-3 py-1.5 rounded-lg text-xs font-medium transition-all flex items-center gap-1.5 ${resolution === '4K'
+                                ? 'bg-indigo-500 text-white shadow-sm shadow-indigo-500/30'
+                                : 'text-zinc-500 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-200'
                                 }`}
                         >
                             {t.res4k}
-                            {resolution === '4K' && authMode !== 'key' && <Zap className="w-3 h-3 fill-current animate-pulse" />}
-                            {authMode === 'key' && <Lock className="w-3 h-3 opacity-50" />}
-
-                            {/* Tooltip: Click to unlock 4K */}
-                            {authMode === 'key' && (
-                                <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-3 px-3 py-2 bg-amber-500 text-white text-[10px] rounded-lg whitespace-nowrap opacity-0 group-hover/4k:opacity-100 transition-opacity pointer-events-none shadow-xl z-50 text-center">
-                                    <div className="font-bold">{lang === 'en' ? 'Click to unlock 4K' : '点击解锁 4K'}</div>
-                                    <div className="text-amber-100 mt-0.5">{lang === 'en' ? 'Passcode required' : '需购买口令'}</div>
-                                    <div className="absolute top-full left-1/2 -translate-x-1/2 -mt-1 border-4 border-transparent border-t-amber-500"></div>
-                                </div>
-                            )}
+                            {resolution === '4K' && <Zap className="w-3 h-3 fill-current animate-pulse" />}
 
                             {/* Tooltip: High cost warning for active 4K */}
-                            {resolution === '4K' && authMode !== 'key' && (
+                            {resolution === '4K' && (
                                 <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-3 px-3 py-1.5 bg-zinc-900 dark:bg-zinc-800 text-white text-[10px] rounded-lg whitespace-nowrap opacity-0 group-hover/4k:opacity-100 transition-opacity pointer-events-none shadow-xl border border-white/10 z-50">
                                     {t.highCost}
                                     <div className="absolute top-full left-1/2 -translate-x-1/2 -mt-1 border-4 border-transparent border-t-zinc-900 dark:border-t-zinc-800"></div>
