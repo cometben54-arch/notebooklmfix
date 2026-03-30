@@ -49,6 +49,8 @@ type TranslationKeys = {
     networkError: string;
     verifying: string;
     save: string;
+    savedSuccess: string;
+    keySavedHint: string;
     getKey: string;
     googleTitle: string;
     googleDesc1: string;
@@ -116,7 +118,9 @@ export const TRANSLATIONS: Record<Language, TranslationKeys> = {
         networkError: 'Network Error',
         verifying: 'Verifying...',
         save: 'Confirm & Save',
-        getKey: 'GET KEY / PASSCODE',
+        savedSuccess: 'Saved! Remembered on this device.',
+        keySavedHint: 'API Key saved. No need to re-enter next time.',
+        getKey: 'GET API KEY',
         googleTitle: 'Google AI Studio',
         googleDesc1: 'Free API Key · Requires Credit Card',
         googleDesc2: '* Supports 2K & 4K Ultra',
@@ -181,7 +185,9 @@ export const TRANSLATIONS: Record<Language, TranslationKeys> = {
         networkError: '验证失败，请检查网络',
         verifying: '验证中...',
         save: '确认并保存',
-        getKey: '获取密钥 / 口令',
+        savedSuccess: '已保存！下次打开无需重新输入',
+        keySavedHint: 'API 密钥已保存，下次打开无需重新输入。',
+        getKey: '获取 API 密钥',
         googleTitle: 'Google AI Studio',
         googleDesc1: '免费 API 密钥 · 需绑定信用卡',
         googleDesc2: '* 支持 2K & 极致 4K',

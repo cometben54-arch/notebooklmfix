@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Key, X, ExternalLink, ShieldCheck, Save, Eye, EyeOff } from 'lucide-react';
+import { Key, X, ExternalLink, ShieldCheck, Save, Eye, EyeOff, CheckCircle } from 'lucide-react';
 import { QuotaInfo } from '../../types';
 import { TRANSLATIONS } from '../../i18n/translations';
 
@@ -15,6 +15,8 @@ export const ApiKeyModal: React.FC<ApiKeyModalProps> = ({ isOpen, onClose, onSav
     const [showKey, setShowKey] = useState(false);
     const [verifying, setVerifying] = useState(false);
     const [error, setError] = useState('');
+    const [saved, setSaved] = useState(false);
+    const [hasSavedKey, setHasSavedKey] = useState(false);
     // Dictionary
     const t = TRANSLATIONS[lang];
 
@@ -23,9 +25,17 @@ export const ApiKeyModal: React.FC<ApiKeyModalProps> = ({ isOpen, onClose, onSav
         if (isOpen) {
             const savedKey = localStorage.getItem('gemini_api_key_local');
             const savedCode = localStorage.getItem('gemini_access_code');
-            if (savedKey) setApiKey(savedKey);
-            else if (savedCode) setApiKey(savedCode);
+            if (savedKey) {
+                setApiKey(savedKey);
+                setHasSavedKey(true);
+            } else if (savedCode) {
+                setApiKey(savedCode);
+                setHasSavedKey(true);
+            } else {
+                setHasSavedKey(false);
+            }
             setError('');
+            setSaved(false);
         }
     }, [isOpen]);
 
@@ -44,7 +54,9 @@ export const ApiKeyModal: React.FC<ApiKeyModalProps> = ({ isOpen, onClose, onSav
                 localStorage.setItem('gemini_api_key_local', value);
                 localStorage.removeItem('gemini_access_code');
                 onSave(value);
-                onClose();
+                setSaved(true);
+                setHasSavedKey(true);
+                setTimeout(() => onClose(), 1200);
             } else {
                 // It's likely an Access Code (Proxy Mode) -> Verify with Server
                 const res = await fetch('/api/verify-code', {
@@ -58,8 +70,10 @@ export const ApiKeyModal: React.FC<ApiKeyModalProps> = ({ isOpen, onClose, onSav
                 if (data.valid) {
                     localStorage.setItem('gemini_access_code', value);
                     localStorage.removeItem('gemini_api_key_local');
-                    onSave(value, data.quota); // Pass initial quota info back
-                    onClose();
+                    onSave(value, data.quota);
+                    setSaved(true);
+                    setHasSavedKey(true);
+                    setTimeout(() => onClose(), 1200);
                 } else {
                     setError(data.error || t.invalidCode);
                 }
@@ -121,16 +135,28 @@ export const ApiKeyModal: React.FC<ApiKeyModalProps> = ({ isOpen, onClose, onSav
                                 </button>
                             </div>
                             {error && <p className="text-xs text-red-500 font-medium animate-in fade-in flex items-center gap-1"><ShieldCheck className="w-3 h-3" /> {error}</p>}
+                            {hasSavedKey && !error && !saved && (
+                                <p className="text-xs text-emerald-600 dark:text-emerald-400 font-medium flex items-center gap-1">
+                                    <CheckCircle className="w-3 h-3" /> {t.keySavedHint}
+                                </p>
+                            )}
                         </div>
 
                         <button
                             type="submit"
-                            disabled={!apiKey.trim() || verifying}
-                            className="w-full flex items-center justify-center gap-2 bg-zinc-900 dark:bg-white text-white dark:text-black font-bold py-3 rounded-xl hover:shadow-lg hover:translate-y-[-1px] active:translate-y-[0px] disabled:opacity-50 disabled:cursor-not-allowed transition-all"
+                            disabled={!apiKey.trim() || verifying || saved}
+                            className={`w-full flex items-center justify-center gap-2 font-bold py-3 rounded-xl transition-all ${saved
+                                ? 'bg-emerald-500 text-white'
+                                : 'bg-zinc-900 dark:bg-white text-white dark:text-black hover:shadow-lg hover:translate-y-[-1px] active:translate-y-[0px] disabled:opacity-50 disabled:cursor-not-allowed'
+                            }`}
                         >
-                            {verifying ? (
+                            {saved ? (
+                                <span className="flex items-center gap-2 animate-in fade-in">
+                                    <CheckCircle className="w-4 h-4" /> {t.savedSuccess}
+                                </span>
+                            ) : verifying ? (
                                 <span className="animate-pulse flex items-center gap-2">
-                                    <Zap className="w-4 h-4" /> {t.verifying}
+                                    <ShieldCheck className="w-4 h-4" /> {t.verifying}
                                 </span>
                             ) : (
                                 <>
