@@ -494,10 +494,7 @@ const App: React.FC = () => {
         </div>
       </div>
 
-      <Footer t={t} onOpenLegal={(tab) => {
-        setLegalInitialTab(tab);
-        setIsLegalModalOpen(true);
-      }} />
+      <Footer t={t} />
 
       <CompletionBanner
         show={showCompletionBanner}

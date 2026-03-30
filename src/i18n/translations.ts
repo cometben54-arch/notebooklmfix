@@ -61,11 +61,7 @@ type TranslationKeys = {
     tip: string;
 
     // Footer
-    copyright: string;
-    builtBy: string;
-    rights: string;
-    privacy: string;
-    terms: string;
+    footerInfo: string;
     disclaimerTitle: string;
     disclaimerText: string;
 };
@@ -132,11 +128,7 @@ export const TRANSLATIONS: Record<Language, TranslationKeys> = {
         tip: '* Get your free API key from Google AI Studio to unlock 2K & 4K restoration.',
 
         // Footer
-        copyright: "© 2026 NotebookLM Fixer.",
-        builtBy: "Designed & Built by 懊侬 AoNong.",
-        rights: "All rights reserved.",
-        privacy: "Privacy Policy",
-        terms: "Terms of Service",
+        footerInfo: "Based on open-source software. For internal use by Zhixin Education Technology.",
         disclaimerTitle: "Disclaimer & Policy",
         disclaimerText: "AI restoration involves redrawing and is not 100% perfect. Extremely small or blurry text in the original image may not be fully restored. Policy: Quota is deducted upon success; failed attempts are automatically refunded."
     },
@@ -201,11 +193,7 @@ export const TRANSLATIONS: Record<Language, TranslationKeys> = {
         tip: '* 从 Google AI Studio 获取免费 API 密钥，即可使用 2K & 4K 高清修复。',
 
         // Footer
-        copyright: "© 2026 NotebookLM Fixer.",
-        builtBy: "由 懊侬 AoNong 设计与开发。",
-        rights: "保留所有权利。",
-        privacy: "隐私政策",
-        terms: "服务条款",
+        footerInfo: "基于开源软件开发，质心教育科技内部使用。",
         disclaimerTitle: "免责声明 & 计费规则",
         disclaimerText: "AI 修复并非 100% 完美，对于原图中极小或极其模糊的文字，可能存在修复失败的情况，请予以理解。规则：修复成功扣费；若修复失败，额度会自动回退。"
     }
