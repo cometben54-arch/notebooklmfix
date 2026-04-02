@@ -14,12 +14,59 @@ const getClosestAspectRatio = (width: number, height: number): string => {
     { label: "16:9", value: 1.77 },
   ];
 
-  // Find the one with minimum difference
   const closest = supported.reduce((prev, curr) => {
     return Math.abs(curr.value - ratio) < Math.abs(prev.value - ratio) ? curr : prev;
   });
 
   return closest.label;
+};
+
+// Client-side upscale: scale a base64 image to 4K dimensions using high-quality canvas interpolation
+const upscaleTo4K = (base64Image: string, originalWidth: number, originalHeight: number): Promise<string> => {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => {
+      // Calculate 4K target dimensions (max dimension ~3840px), maintaining aspect ratio
+      const MAX_4K = 3840;
+      let targetW = originalWidth;
+      let targetH = originalHeight;
+      const scale = Math.min(MAX_4K / targetW, MAX_4K / targetH);
+      if (scale > 1) {
+        targetW = Math.round(targetW * scale);
+        targetH = Math.round(targetH * scale);
+      }
+
+      // Two-pass upscaling for better quality
+      // Pass 1: scale to 2x of source image
+      const midCanvas = document.createElement('canvas');
+      const midW = img.width * 2;
+      const midH = img.height * 2;
+      midCanvas.width = midW;
+      midCanvas.height = midH;
+      const midCtx = midCanvas.getContext('2d');
+      if (midCtx) {
+        midCtx.imageSmoothingEnabled = true;
+        midCtx.imageSmoothingQuality = 'high';
+        midCtx.drawImage(img, 0, 0, midW, midH);
+      }
+
+      // Pass 2: scale to final 4K target
+      const canvas = document.createElement('canvas');
+      canvas.width = targetW;
+      canvas.height = targetH;
+      const ctx = canvas.getContext('2d');
+      if (ctx) {
+        ctx.imageSmoothingEnabled = true;
+        ctx.imageSmoothingQuality = 'high';
+        ctx.drawImage(midCanvas, 0, 0, targetW, targetH);
+        resolve(canvas.toDataURL('image/png'));
+      } else {
+        reject(new Error('Canvas context failed'));
+      }
+    };
+    img.onerror = () => reject(new Error('Image load failed during upscale'));
+    img.src = base64Image;
+  });
 };
 
 export const checkApiKeySelection = async (): Promise<boolean> => {
@@ -184,27 +231,22 @@ export const processImageWithGemini = async (
   }
 
   // --- STANDARD MODE (Direct API Key) ---
-  // --- STANDARD MODE (Direct API Key) ---
-  // Priority: 1. Google Project IDX (injected) 2. Local Storage
   const localKey = localStorage.getItem('gemini_api_key_local');
 
   if (!localKey) {
     throw new Error("No API Key found. Please configure your key in settings.");
   }
 
-  const apiKeyToUse = localKey;
-
-  const ai = new GoogleGenAI({ apiKey: apiKeyToUse });
+  const ai = new GoogleGenAI({ apiKey: localKey });
   const aspectRatio = getClosestAspectRatio(width, height);
 
-  try {
+  // Helper: call Gemini API with given imageSize
+  const callGemini = async (size: '2K' | '4K') => {
     const response = await ai.models.generateContent({
-      model: 'gemini-3-pro-image-preview', // Mapped from "nano banana pro"
+      model: 'gemini-3-pro-image-preview',
       contents: {
         parts: [
-          {
-            text: USER_PROMPT,
-          },
+          { text: USER_PROMPT },
           {
             inlineData: {
               mimeType: 'image/png',
@@ -217,21 +259,39 @@ export const processImageWithGemini = async (
         systemInstruction: SYSTEM_PROMPT,
         imageConfig: {
           aspectRatio: aspectRatio,
-          imageSize: imageSize,
+          imageSize: size,
         }
       },
     });
 
-    // Extract image from response
     if (response.candidates && response.candidates[0].content && response.candidates[0].content.parts) {
       for (const part of response.candidates[0].content.parts) {
         if (part.inlineData && part.inlineData.data) {
-          return { image: `data:image/png;base64,${part.inlineData.data}` };
+          return `data:image/png;base64,${part.inlineData.data}`;
         }
       }
     }
-
     throw new Error("No image generated in response");
+  };
+
+  try {
+    if (imageSize === '4K') {
+      // Strategy: try native 4K first, fallback to 2K + client-side upscale
+      try {
+        console.log("[4K] Attempting native 4K generation...");
+        const image = await callGemini('4K');
+        return { image };
+      } catch (err4k) {
+        console.warn("[4K] Native 4K failed, falling back to 2K + upscale:", err4k);
+        const image2k = await callGemini('2K');
+        console.log("[4K] 2K generated, upscaling to 4K...");
+        const image4k = await upscaleTo4K(image2k, width, height);
+        return { image: image4k };
+      }
+    } else {
+      const image = await callGemini('2K');
+      return { image };
+    }
   } catch (error) {
     console.error("Gemini API Error:", error);
     throw error;
