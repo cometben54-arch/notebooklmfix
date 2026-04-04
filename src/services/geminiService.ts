@@ -1,6 +1,6 @@
 import { GoogleGenAI } from "@google/genai";
 
-import { SYSTEM_PROMPT, USER_PROMPT } from '../constants/prompts';
+import { SYSTEM_PROMPT, USER_PROMPT, ENHANCE_4K_PROMPT } from '../constants/prompts';
 
 // Helper to calculate closest aspect ratio supported by Gemini 3 Pro Image
 // Supported: "1:1", "3:4", "4:3", "9:16", "16:9"
@@ -240,17 +240,17 @@ export const processImageWithGemini = async (
   const ai = new GoogleGenAI({ apiKey: localKey });
   const aspectRatio = getClosestAspectRatio(width, height);
 
-  // Helper: call Gemini API with given imageSize
-  const callGemini = async (size: '2K' | '4K') => {
+  // Helper: call Gemini API with given prompt and imageSize
+  const callGemini = async (prompt: string, imageBase64: string, size: '2K' | '4K') => {
     const response = await ai.models.generateContent({
       model: 'gemini-3-pro-image-preview',
       contents: {
         parts: [
-          { text: USER_PROMPT },
+          { text: prompt },
           {
             inlineData: {
               mimeType: 'image/png',
-              data: cleanBase64,
+              data: imageBase64,
             },
           },
         ],
@@ -267,7 +267,7 @@ export const processImageWithGemini = async (
     if (response.candidates && response.candidates[0].content && response.candidates[0].content.parts) {
       for (const part of response.candidates[0].content.parts) {
         if (part.inlineData && part.inlineData.data) {
-          return `data:image/png;base64,${part.inlineData.data}`;
+          return part.inlineData.data; // Return raw base64 without prefix
         }
       }
     }
@@ -276,21 +276,28 @@ export const processImageWithGemini = async (
 
   try {
     if (imageSize === '4K') {
-      // Strategy: try native 4K first, fallback to 2K + client-side upscale
+      // 4K Strategy: Two-pass AI enhancement
+      // Pass 1: Restore at 2K (watermark removal + text clarity + enhancement)
+      console.log("[4K] Pass 1: Restoring at 2K...");
+      const pass1Base64 = await callGemini(USER_PROMPT, cleanBase64, '2K');
+
+      // Pass 2: Send restored 2K back for ultra-sharp enhancement
+      console.log("[4K] Pass 2: AI enhancement for ultra clarity...");
       try {
-        console.log("[4K] Attempting native 4K generation...");
-        const image = await callGemini('4K');
-        return { image };
-      } catch (err4k) {
-        console.warn("[4K] Native 4K failed, falling back to 2K + upscale:", err4k);
-        const image2k = await callGemini('2K');
-        console.log("[4K] 2K generated, upscaling to 4K...");
-        const image4k = await upscaleTo4K(image2k, width, height);
+        const pass2Base64 = await callGemini(ENHANCE_4K_PROMPT, pass1Base64, '2K');
+        // Upscale the double-enhanced result to 4K dimensions
+        console.log("[4K] Upscaling to 4K dimensions...");
+        const image4k = await upscaleTo4K(`data:image/png;base64,${pass2Base64}`, width, height);
+        return { image: image4k };
+      } catch (pass2Err) {
+        // If pass 2 fails, upscale pass 1 result
+        console.warn("[4K] Pass 2 failed, upscaling pass 1 result:", pass2Err);
+        const image4k = await upscaleTo4K(`data:image/png;base64,${pass1Base64}`, width, height);
         return { image: image4k };
       }
     } else {
-      const image = await callGemini('2K');
-      return { image };
+      const resultBase64 = await callGemini(USER_PROMPT, cleanBase64, '2K');
+      return { image: `data:image/png;base64,${resultBase64}` };
     }
   } catch (error) {
     console.error("Gemini API Error:", error);
