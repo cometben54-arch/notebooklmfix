@@ -281,7 +281,32 @@ export const processImageWithGemini = async (
   const ai = new GoogleGenAI({ apiKey: localKey });
   const aspectRatio = getClosestAspectRatio(width, height);
   const inputSizeMB = (cleanBase64.length * 0.75) / (1024 * 1024);
-  console.log(`[Input] ${width}x${height}, ${inputSizeMB.toFixed(2)}MB`);
+  console.log(`[Input] ${width}x${height}, ${inputSizeMB.toFixed(2)}MB (PNG)`);
+
+  // Convert to JPEG at same resolution to reduce payload size
+  // PNG 1536x2752 ≈ 10-15MB, JPEG same resolution ≈ 1-3MB
+  // This does NOT reduce resolution — only changes format
+  if (inputSizeMB > 3) {
+    console.log(`[Input] Payload too large for fetch. Converting to JPEG (same resolution)...`);
+    cleanBase64 = await new Promise<string>((resolve) => {
+      const img = new Image();
+      img.onload = () => {
+        const canvas = document.createElement('canvas');
+        canvas.width = img.width;
+        canvas.height = img.height;
+        const ctx = canvas.getContext('2d')!;
+        ctx.fillStyle = '#FFFFFF';
+        ctx.fillRect(0, 0, img.width, img.height);
+        ctx.drawImage(img, 0, 0);
+        const jpeg = canvas.toDataURL('image/jpeg', 0.92).replace(/^data:image\/jpeg;base64,/, '');
+        const newMB = (jpeg.length * 0.75 / 1024 / 1024).toFixed(2);
+        console.log(`[Input] Converted: ${img.width}x${img.height}, ${newMB}MB (JPEG 92%)`);
+        resolve(jpeg);
+      };
+      img.onerror = () => resolve(cleanBase64);
+      img.src = `data:image/png;base64,${cleanBase64}`;
+    });
+  }
 
   // Core API call — matches the config that was proven to work for 2K
   const callGemini = async (prompt: string, imageBase64: string, size: '2K' | '4K', maxRetries: number = 2): Promise<string> => {
