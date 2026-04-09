@@ -27,17 +27,14 @@ export async function onRequest(context) {
 
         const body = {
             contents: Array.isArray(contents) ? contents : [contents],
+            generationConfig: {
+                responseModalities: ['TEXT', 'IMAGE'],
+            },
         };
 
         if (config?.systemInstruction) {
             body.systemInstruction = {
                 parts: [{ text: config.systemInstruction }],
-            };
-        }
-
-        if (config?.imageConfig) {
-            body.generationConfig = {
-                imageGenerationConfig: config.imageConfig,
             };
         }
 

@@ -29,17 +29,14 @@ export default async function handler(req, res) {
         // Transform config to Google API format
         const body = {
             contents: Array.isArray(contents) ? contents : [contents],
+            generationConfig: {
+                responseModalities: ['TEXT', 'IMAGE'],
+            },
         };
 
         if (genConfig?.systemInstruction) {
             body.systemInstruction = {
                 parts: [{ text: genConfig.systemInstruction }]
-            };
-        }
-
-        if (genConfig?.imageConfig) {
-            body.generationConfig = {
-                imageGenerationConfig: genConfig.imageConfig,
             };
         }
 
