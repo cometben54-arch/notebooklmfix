@@ -283,20 +283,12 @@ export const processImageWithGemini = async (
   const inputSizeMB = (cleanBase64.length * 0.75) / (1024 * 1024);
   console.log(`[Input] ${width}x${height}, ${inputSizeMB.toFixed(2)}MB`);
 
-  // Detect actual MIME type from base64 header
-  const detectMime = (b64: string): string => {
-    if (b64.startsWith('/9j/')) return 'image/jpeg';
-    if (b64.startsWith('iVBOR')) return 'image/png';
-    if (b64.startsWith('UklGR')) return 'image/webp';
-    return 'image/png';
-  };
-
-  // Helper: call Gemini API with retry and diagnostics
-  const callGemini = async (prompt: string, imageBase64: string, maxRetries: number = 2): Promise<string> => {
+  // Core API call — matches the config that was proven to work for 2K
+  const callGemini = async (prompt: string, imageBase64: string, size: '2K' | '4K', maxRetries: number = 2): Promise<string> => {
     let lastTextResponse = '';
 
     for (let attempt = 1; attempt <= maxRetries; attempt++) {
-      console.log(`[Gemini] Attempt ${attempt}/${maxRetries}...`);
+      console.log(`[Gemini] Attempt ${attempt}/${maxRetries} (${size})...`);
 
       const response = await ai.models.generateContent({
         model: 'gemini-3-pro-image-preview',
@@ -305,18 +297,17 @@ export const processImageWithGemini = async (
             { text: prompt },
             {
               inlineData: {
-                mimeType: detectMime(imageBase64),
+                mimeType: 'image/png',
                 data: imageBase64,
               },
             },
           ],
         },
         config: {
-          responseModalities: ['TEXT', 'IMAGE'],
           systemInstruction: SYSTEM_PROMPT,
           imageConfig: {
             aspectRatio: aspectRatio,
-            imageSize: '2K',
+            imageSize: size,
           }
         },
       });
@@ -330,6 +321,10 @@ export const processImageWithGemini = async (
       });
       console.log(`[Gemini] Response parts: [${partTypes.join(', ')}]`);
 
+      // Also log finishReason and safety
+      const candidate = response.candidates?.[0];
+      if (candidate?.finishReason) console.log(`[Gemini] finishReason: ${candidate.finishReason}`);
+
       // Extract image from response
       for (const part of parts) {
         if (part.inlineData && part.inlineData.data) {
@@ -337,7 +332,7 @@ export const processImageWithGemini = async (
         }
       }
 
-      // No image - capture model's text response for error reporting
+      // No image — capture text for diagnostics
       lastTextResponse = parts.filter((p: any) => p.text).map((p: any) => p.text).join('\n');
       console.warn(`[Gemini] Attempt ${attempt}: No image. Model said: ${lastTextResponse.substring(0, 300)}`);
 
@@ -346,34 +341,23 @@ export const processImageWithGemini = async (
       }
     }
 
-    // Include the model's text response in the error so user can see WHY it failed
     const reason = lastTextResponse
-      ? `Model response: "${lastTextResponse.substring(0, 150)}"`
+      ? `Model response: "${lastTextResponse.substring(0, 200)}"`
       : 'Model returned empty response';
     throw new Error(`No image generated. ${reason}`);
   };
 
   try {
     if (imageSize === '4K') {
-      // 4K Strategy: Restore at 2K, then enhance + upscale
-      console.log("[4K] Pass 1: Restoring...");
-      const pass1Base64 = await callGemini(USER_PROMPT, cleanBase64, 2);
-
-      // Pass 2: Enhancement (optional, fallback gracefully)
-      console.log("[4K] Pass 2: Enhancing clarity...");
-      let finalBase64 = pass1Base64;
-      try {
-        finalBase64 = await callGemini(ENHANCE_4K_PROMPT, pass1Base64, 1);
-      } catch (pass2Err) {
-        console.warn("[4K] Pass 2 failed, using pass 1 result:", pass2Err);
-      }
-
+      // 4K: generate at 2K, then upscale to 4K
+      console.log("[4K] Generating at 2K, will upscale...");
+      const base64 = await callGemini(USER_PROMPT, cleanBase64, '2K', 2);
       console.log("[4K] Upscaling to 4K dimensions...");
-      const image4k = await upscaleTo4K(`data:image/png;base64,${finalBase64}`, width, height);
+      const image4k = await upscaleTo4K(`data:image/png;base64,${base64}`, width, height);
       return { image: image4k };
     } else {
-      const resultBase64 = await callGemini(USER_PROMPT, cleanBase64, 2);
-      return { image: `data:image/png;base64,${resultBase64}` };
+      const base64 = await callGemini(USER_PROMPT, cleanBase64, '2K', 2);
+      return { image: `data:image/png;base64,${base64}` };
     }
   } catch (error) {
     console.error("Gemini API Error:", error);
