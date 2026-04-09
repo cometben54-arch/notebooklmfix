@@ -2,8 +2,7 @@ import { GoogleGenAI } from "@google/genai";
 
 import { SYSTEM_PROMPT, USER_PROMPT, ENHANCE_4K_PROMPT } from '../constants/prompts';
 
-// Helper to calculate closest aspect ratio supported by Gemini 3 Pro Image
-// Supported: "1:1", "3:4", "4:3", "9:16", "16:9"
+// Helper to calculate closest aspect ratio supported by Gemini image generation
 const getClosestAspectRatio = (width: number, height: number): string => {
   const ratio = width / height;
   const supported = [
@@ -21,12 +20,56 @@ const getClosestAspectRatio = (width: number, height: number): string => {
   return closest.label;
 };
 
-// Client-side upscale: scale a base64 image to 4K dimensions using high-quality canvas interpolation
+// Compress an image to fit within maxDim while maintaining aspect ratio
+const compressForApi = (base64: string, maxDim: number = 1536): Promise<string> => {
+  return new Promise((resolve) => {
+    const img = new Image();
+    img.onload = () => {
+      let w = img.width;
+      let h = img.height;
+
+      // Only resize if exceeding maxDim
+      if (w <= maxDim && h <= maxDim) {
+        resolve(base64);
+        return;
+      }
+
+      if (w > h) {
+        h = Math.round((h * maxDim) / w);
+        w = maxDim;
+      } else {
+        w = Math.round((w * maxDim) / h);
+        h = maxDim;
+      }
+
+      const canvas = document.createElement('canvas');
+      canvas.width = w;
+      canvas.height = h;
+      const ctx = canvas.getContext('2d');
+      if (ctx) {
+        ctx.fillStyle = '#FFFFFF';
+        ctx.fillRect(0, 0, w, h);
+        ctx.imageSmoothingEnabled = true;
+        ctx.imageSmoothingQuality = 'high';
+        ctx.drawImage(img, 0, 0, w, h);
+        const compressed = canvas.toDataURL('image/jpeg', 0.85).replace(/^data:image\/jpeg;base64,/, "");
+        const sizeMB = (compressed.length * 0.75 / 1024 / 1024).toFixed(2);
+        console.log(`[Compress] ${img.width}x${img.height} -> ${w}x${h} (${sizeMB}MB)`);
+        resolve(compressed);
+      } else {
+        resolve(base64);
+      }
+    };
+    img.onerror = () => resolve(base64);
+    img.src = base64.startsWith('data:') ? base64 : `data:image/png;base64,${base64}`;
+  });
+};
+
+// Client-side upscale: scale a base64 image to 4K dimensions
 const upscaleTo4K = (base64Image: string, originalWidth: number, originalHeight: number): Promise<string> => {
   return new Promise((resolve, reject) => {
     const img = new Image();
     img.onload = () => {
-      // Calculate 4K target dimensions (max dimension ~3840px), maintaining aspect ratio
       const MAX_4K = 3840;
       let targetW = originalWidth;
       let targetH = originalHeight;
@@ -37,7 +80,6 @@ const upscaleTo4K = (base64Image: string, originalWidth: number, originalHeight:
       }
 
       // Two-pass upscaling for better quality
-      // Pass 1: scale to 2x of source image
       const midCanvas = document.createElement('canvas');
       const midW = img.width * 2;
       const midH = img.height * 2;
@@ -50,7 +92,6 @@ const upscaleTo4K = (base64Image: string, originalWidth: number, originalHeight:
         midCtx.drawImage(img, 0, 0, midW, midH);
       }
 
-      // Pass 2: scale to final 4K target
       const canvas = document.createElement('canvas');
       canvas.width = targetW;
       canvas.height = targetH;
@@ -240,63 +281,90 @@ export const processImageWithGemini = async (
   const ai = new GoogleGenAI({ apiKey: localKey });
   const aspectRatio = getClosestAspectRatio(width, height);
 
-  // Helper: call Gemini API with given prompt and imageSize
-  const callGemini = async (prompt: string, imageBase64: string, size: '2K' | '4K') => {
-    const response = await ai.models.generateContent({
-      model: 'gemini-3-pro-image-preview',
-      contents: {
-        parts: [
-          { text: prompt },
-          {
-            inlineData: {
-              mimeType: 'image/png',
-              data: imageBase64,
-            },
-          },
-        ],
-      },
-      config: {
-        systemInstruction: SYSTEM_PROMPT,
-        imageConfig: {
-          aspectRatio: aspectRatio,
-          imageSize: size,
-        }
-      },
-    });
+  // Compress large input images to prevent API failures
+  const inputSizeMB = (cleanBase64.length * 0.75) / (1024 * 1024);
+  console.log(`[Input] Original: ${width}x${height}, base64: ${inputSizeMB.toFixed(2)}MB`);
+  if (width > 1536 || height > 1536 || inputSizeMB > 3) {
+    console.log("[Input] Image too large, compressing for API...");
+    cleanBase64 = await compressForApi(cleanBase64, 1536);
+  }
 
-    if (response.candidates && response.candidates[0].content && response.candidates[0].content.parts) {
-      for (const part of response.candidates[0].content.parts) {
+  // Helper: call Gemini API with retry and diagnostics
+  const callGemini = async (prompt: string, imageBase64: string, maxRetries: number = 2): Promise<string> => {
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      console.log(`[Gemini] Attempt ${attempt}/${maxRetries}...`);
+
+      const response = await ai.models.generateContent({
+        model: 'gemini-3-pro-image-preview',
+        contents: {
+          parts: [
+            { text: prompt },
+            {
+              inlineData: {
+                mimeType: 'image/jpeg',
+                data: imageBase64,
+              },
+            },
+          ],
+        },
+        config: {
+          responseModalities: ['TEXT', 'IMAGE'],
+          systemInstruction: SYSTEM_PROMPT,
+          imageConfig: {
+            aspectRatio: aspectRatio,
+          }
+        },
+      });
+
+      // Diagnostic: log what the API returned
+      const parts = response.candidates?.[0]?.content?.parts || [];
+      const partTypes = parts.map((p: any) => {
+        if (p.inlineData?.data) return `image(${(p.inlineData.data.length * 0.75 / 1024).toFixed(0)}KB)`;
+        if (p.text) return `text(${p.text.substring(0, 80)}...)`;
+        return 'unknown';
+      });
+      console.log(`[Gemini] Response parts: [${partTypes.join(', ')}]`);
+
+      // Extract image from response
+      for (const part of parts) {
         if (part.inlineData && part.inlineData.data) {
-          return part.inlineData.data; // Return raw base64 without prefix
+          return part.inlineData.data;
         }
       }
+
+      // No image found - log text response for diagnostics
+      const textParts = parts.filter((p: any) => p.text).map((p: any) => p.text).join('\n');
+      console.warn(`[Gemini] Attempt ${attempt}: No image in response. Text: ${textParts.substring(0, 200)}`);
+
+      if (attempt < maxRetries) {
+        console.log(`[Gemini] Retrying in 2s...`);
+        await new Promise(r => setTimeout(r, 2000));
+      }
     }
-    throw new Error("No image generated in response");
+
+    throw new Error("No image generated after retries. The model returned text instead of an image. Try again or use 2K mode.");
   };
 
   try {
     if (imageSize === '4K') {
-      // 4K Strategy: Two-pass AI enhancement
-      // Pass 1: Restore at 2K (watermark removal + text clarity + enhancement)
-      console.log("[4K] Pass 1: Restoring at 2K...");
-      const pass1Base64 = await callGemini(USER_PROMPT, cleanBase64, '2K');
+      // 4K Strategy: Restore at 2K, then enhance + upscale
+      console.log("[4K] Pass 1: Restoring...");
+      const pass1Base64 = await callGemini(USER_PROMPT, cleanBase64, 2);
 
-      // Pass 2: Send restored 2K back for ultra-sharp enhancement
-      console.log("[4K] Pass 2: AI enhancement for ultra clarity...");
+      // Pass 2: Enhancement (optional, fallback gracefully)
+      console.log("[4K] Pass 2: Enhancing clarity...");
+      let finalBase64 = pass1Base64;
       try {
-        const pass2Base64 = await callGemini(ENHANCE_4K_PROMPT, pass1Base64, '2K');
-        // Upscale the double-enhanced result to 4K dimensions
-        console.log("[4K] Upscaling to 4K dimensions...");
-        const image4k = await upscaleTo4K(`data:image/png;base64,${pass2Base64}`, width, height);
-        return { image: image4k };
+        finalBase64 = await callGemini(ENHANCE_4K_PROMPT, pass1Base64, 1);
       } catch (pass2Err) {
-        // If pass 2 fails, upscale pass 1 result
-        console.warn("[4K] Pass 2 failed, upscaling pass 1 result:", pass2Err);
-        const image4k = await upscaleTo4K(`data:image/png;base64,${pass1Base64}`, width, height);
-        return { image: image4k };
+        console.warn("[4K] Pass 2 failed, using pass 1 result:", pass2Err);
       }
+
+      console.log("[4K] Upscaling to 4K dimensions...");
+      const image4k = await upscaleTo4K(`data:image/png;base64,${finalBase64}`, width, height);
+      return { image: image4k };
     } else {
-      const resultBase64 = await callGemini(USER_PROMPT, cleanBase64, '2K');
+      const resultBase64 = await callGemini(USER_PROMPT, cleanBase64, 2);
       return { image: `data:image/png;base64,${resultBase64}` };
     }
   } catch (error) {
