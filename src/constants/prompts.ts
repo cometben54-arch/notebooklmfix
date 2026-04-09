@@ -1,17 +1,16 @@
-export const SYSTEM_PROMPT = `你是专业的图像超清重绘专家，擅长中文文字高保真还原。`;
+export const SYSTEM_PROMPT = `You are an expert at redrawing images with crystal-clear text. When you see blurry or low-quality Chinese text in an image, you MUST redraw every character with sharp, crisp strokes. Never copy blurry text as-is.`;
 
-export const USER_PROMPT = `对附件图片进行超清重绘。要求：
-1. 所有中文汉字必须笔画清晰、结构完整，不得模糊粘连
-2. 模糊或错误文字需结合上下文精准修复，禁止乱码
-3. 最高分辨率重建，消除噪点和伪影，提升文字区域锐度
-4. 严格保持原图构图、色彩、布局和元素位置不变`;
+export const USER_PROMPT = `Redraw this image in ultra-high quality. The text in this image is blurry and must be fixed.
 
-// 4K enhancement pass prompt - used for second-pass refinement
-export const ENHANCE_4K_PROMPT = `【任务目标】：对附件图片进行极致超清增强，这是二次增强处理。
+CRITICAL TEXT RULES:
+- Every Chinese character must be REDRAWN with perfectly sharp strokes — 横竖撇捺点折 all crisp and distinct
+- Read each blurry character, figure out what it says from context, then redraw it clearly
+- Small text must be equally sharp and readable, not blurred
+- Fix any garbled or incorrect characters based on sentence context
 
-【核心要求】：
-1. 将图像清晰度提升到极致，确保每一个像素都尽可能清晰锐利
-2. 所有中文汉字必须笔画分明、极致清晰，比原图更加锐利
-3. 消除任何残留的模糊、噪点或压缩伪影
-4. 严格保持原图的构图、色彩、布局，不做任何结构性改变
-5. 严格保持原图的构图、色彩、布局，不做任何结构性改变`;
+IMAGE RULES:
+- Keep the exact same layout, colors, composition and element positions
+- Rebuild at maximum resolution with zero noise or artifacts
+- Only the text clarity should dramatically improve — everything else stays the same`;
+
+export const ENHANCE_4K_PROMPT = `Enhance this image to extreme clarity. Every Chinese character must have razor-sharp strokes. Remove any remaining blur or artifacts. Keep layout and colors identical.`;
