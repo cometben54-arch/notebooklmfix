@@ -301,18 +301,22 @@ export const processImageWithGemini = async (
   }
 
   // Call Google API via server-side relay (browser -> /api/relay -> Google)
-  const callViaRelay = async (prompt: string, imageBase64: string, maxRetries: number = 2): Promise<string> => {
+  const callViaRelay = async (prompt: string, imageBase64: string, maxRetries: number = 3): Promise<string> => {
     let lastError = '';
     const payloadMB = (imageBase64.length * 0.75 / 1024 / 1024).toFixed(2);
 
+    // Try models in order: Flash (fast, ~5s) then Pro (slower, ~30s)
+    const models = ['gemini-2.0-flash-preview-image-generation', 'gemini-3-pro-image-preview'];
+
     for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      const model = attempt <= 2 ? models[0] : models[1]; // Try flash first, then pro
       try {
         const res = await fetch('/api/relay', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             apiKey: localKey,
-            model: 'gemini-3-pro-image-preview',
+            model,
             contents: {
               parts: [
                 { text: prompt },
