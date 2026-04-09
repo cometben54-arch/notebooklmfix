@@ -1,8 +1,9 @@
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useCallback } from 'react';
 import { ProcessedPage, QuotaInfo } from '../types';
 import { processImageWithGemini } from '../services/geminiService';
 import { AuthMode } from './useAuth';
 import { saveToArchive } from '../db/archive';
+import { LogEntry } from '../components/ui/LogPanel';
 
 interface UseImageProcessingProps {
     pages: ProcessedPage[];
@@ -20,6 +21,8 @@ const dataURLtoBlob = async (dataurl: string): Promise<Blob> => {
     const res = await fetch(dataurl);
     return await res.blob();
 };
+
+let logIdCounter = 0;
 
 export function useImageProcessing({
     pages,
@@ -39,12 +42,24 @@ export function useImageProcessing({
     const [showCompletionBanner, setShowCompletionBanner] = useState(false);
     const [showStoppingToast, setShowStoppingToast] = useState(false);
 
-    // New Error Toast State
+    // Error Toast State
     const [showErrorToast, setShowErrorToast] = useState(false);
     const [errorToastMessage, setErrorToastMessage] = useState('');
 
-    // Default to 2K, user can freely switch to 4K
+    // Log State
+    const [logs, setLogs] = useState<LogEntry[]>([]);
 
+    const addLog = useCallback((level: LogEntry['level'], message: string, detail?: string) => {
+        setLogs(prev => [...prev, {
+            id: ++logIdCounter,
+            timestamp: new Date(),
+            level,
+            message,
+            detail,
+        }]);
+    }, []);
+
+    const clearLogs = useCallback(() => setLogs([]), []);
 
     const abortRef = useRef(false);
 
@@ -73,6 +88,8 @@ export function useImageProcessing({
             return;
         }
 
+        addLog('info', `Starting processing: ${pagesToProcess.length} pages at ${resolution}`);
+
         // 3. Set Processing State
         setIsProcessing(true);
         setIsStopped(false);
@@ -90,6 +107,7 @@ export function useImageProcessing({
             // Check for Abort Signal
             if (abortRef.current) {
                 setIsStopped(true);
+                addLog('warn', 'Processing stopped by user');
                 break;
             }
 
@@ -100,6 +118,10 @@ export function useImageProcessing({
             newPages[i].resolution = resolution;
             setPages([...newPages]); // Trigger UI update
 
+            const pageLabel = `Page ${newPages[i].pageIndex + 1}`;
+            addLog('info', `${pageLabel}: Starting ${resolution} enhancement (${newPages[i].width}x${newPages[i].height})`);
+            const startTime = Date.now();
+
             try {
                 const result = await processImageWithGemini(
                     newPages[i].originalUrl,
@@ -108,34 +130,38 @@ export function useImageProcessing({
                     resolution
                 );
 
+                const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
                 newPages[i].processedUrl = result.image;
                 newPages[i].status = 'completed';
+                addLog('success', `${pageLabel}: Completed in ${elapsed}s`);
 
                 // --- Archive Logic ---
                 try {
                     const blob = await dataURLtoBlob(result.image);
-                    // Use Page Index as name since we don't store filenames per page in ProcessedPage
                     await saveToArchive(blob, newPages[i].width, newPages[i].height, `Page ${newPages[i].pageIndex + 1}`, newPages[i].originalUrl);
-                    // Trigger simple shake animation in Header
                     window.dispatchEvent(new Event('archive-saved'));
                 } catch (archiveErr) {
                     console.error("Failed to archive image:", archiveErr);
-                    // Silent fail for archive - don't stop processing
                 }
-                // ---------------------
 
                 // Update Quota if returned (Access Code Mode)
                 if (result.quota) {
                     setQuota(result.quota);
                 }
 
-            } catch (error) {
-                console.error(`Page ${i + 1} Error:`, error);
+            } catch (error: any) {
+                const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
+                console.error(`${pageLabel} Error:`, error);
                 newPages[i].status = 'error';
 
-                // Trigger Toast only for the first error in a batch to avoid spam
+                // Extract meaningful error message
+                const errMsg = error?.message || error?.toString() || 'Unknown error';
+                const errDetail = extractErrorDetail(error);
+
+                addLog('error', `${pageLabel}: Failed after ${elapsed}s — ${errMsg}`, errDetail);
+
                 if (!showErrorToast) {
-                    triggerErrorToast('⚠️ 部分生成失败，不扣除次数 (Quota Safe)。请稍后重试。');
+                    triggerErrorToast(`${pageLabel} failed: ${errMsg}`);
                 }
             }
 
@@ -153,19 +179,18 @@ export function useImageProcessing({
         const allSelectedDone = selectedPages.length > 0 && selectedPages.every(p => p.status === 'completed' || p.status === 'error');
         const hasSuccessfulPages = selectedPages.some(p => p.status === 'completed');
 
-        // Show banner if:
-        // 1. All selected pages finished (natural completion) AND at least one success
-        // 2. OR Processing was manually stopped AND at least one success
+        const sc = selectedPages.filter(p => p.status === 'completed').length;
+        const fc = selectedPages.filter(p => p.status === 'error').length;
+        addLog('info', `Processing finished: ${sc} success, ${fc} failed`);
+
         if (hasSuccessfulPages && (allSelectedDone || abortRef.current)) {
             setShowCompletionBanner(true);
 
-            // Track successful images for global stats
-            const successfulCount = selectedPages.filter(p => p.status === 'completed').length;
-            if (successfulCount > 0) {
+            if (sc > 0) {
                 fetch('/api/stats', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ count: successfulCount })
+                    body: JSON.stringify({ count: sc })
                 }).catch(() => { /* Silent fail */ });
             }
         }
@@ -178,7 +203,6 @@ export function useImageProcessing({
         setTimeout(() => setShowStoppingToast(false), 2000);
     };
 
-    // Improvement #2: Retry single failed page
     const retryPage = (index: number) => {
         setPages(prev => {
             const newPages = [...prev];
@@ -192,9 +216,9 @@ export function useImageProcessing({
             }
             return newPages;
         });
+        addLog('info', `Page ${index + 1}: Queued for retry`);
     };
 
-    // Improvement #3: Computed stats for CompletionBanner
     const successCount = pages.filter(p => p.status === 'completed').length;
     const failCount = pages.filter(p => p.status === 'error').length;
 
@@ -216,6 +240,35 @@ export function useImageProcessing({
         stopProcessing,
         retryPage,
         successCount,
-        failCount
+        failCount,
+        logs,
+        clearLogs
     };
+}
+
+// Extract structured error detail for display
+function extractErrorDetail(error: any): string | undefined {
+    const parts: string[] = [];
+
+    if (error?.status) parts.push(`HTTP ${error.status}`);
+    if (error?.code) parts.push(`Code: ${error.code}`);
+
+    // Google GenAI SDK errors
+    if (error?.errorDetails) {
+        for (const d of error.errorDetails) {
+            if (d.reason) parts.push(`Reason: ${d.reason}`);
+            if (d.message) parts.push(d.message);
+        }
+    }
+
+    // Nested cause
+    if (error?.cause?.message) parts.push(`Cause: ${error.cause.message}`);
+
+    // Stack trace (first 3 lines)
+    if (error?.stack) {
+        const stackLines = error.stack.split('\n').slice(1, 4).map((l: string) => l.trim());
+        if (stackLines.length) parts.push(stackLines.join('\n'));
+    }
+
+    return parts.length > 0 ? parts.join('\n') : undefined;
 }

@@ -20,6 +20,7 @@ import { ActionBar } from './components/viewer/ActionBar';
 import { ImageGrid } from './components/viewer/ImageGrid';
 import { CompletionBanner } from './components/ui/CompletionBanner';
 import { Toast } from './components/ui/Toast';
+import { LogPanel } from './components/ui/LogPanel';
 import { ComparisonModal } from './components/modals/ComparisonModal';
 import { ZoomModal } from './components/modals/ZoomModal';
 import { ApiKeyModal } from './components/modals/ApiKeyModal';
@@ -80,7 +81,9 @@ const App: React.FC = () => {
     stopProcessing,
     retryPage,
     successCount,
-    failCount
+    failCount,
+    logs,
+    clearLogs
   } = useImageProcessing({
     pages,
     setPages, // Passing setPages to allow updating status/url
@@ -107,11 +110,18 @@ const App: React.FC = () => {
   const [legalInitialTab, setLegalInitialTab] = useState<'privacy' | 'terms'>('privacy');
   const [uploadMode, setUploadMode] = useState<'pdf' | 'image'>('pdf');
   const [showUploadWarning, setShowUploadWarning] = useState(false);
-  const [hasDownloaded, setHasDownloaded] = useState(false); // Track if user downloaded
+  const [hasDownloaded, setHasDownloaded] = useState(false);
+  const [isLogPanelOpen, setIsLogPanelOpen] = useState(false);
 
   // Export State
   const [isExportingPdf, setIsExportingPdf] = useState(false);
   const [isExportingPptx, setIsExportingPptx] = useState(false);
+
+  // Auto-open log panel on errors
+  const errorLogCount = logs.filter(l => l.level === 'error').length;
+  useEffect(() => {
+    if (errorLogCount > 0) setIsLogPanelOpen(true);
+  }, [errorLogCount]);
 
   // Constants
   const t = TRANSLATIONS[lang];
@@ -517,6 +527,14 @@ const App: React.FC = () => {
 
       <Toast show={showStoppingToast} message={lang === 'en' ? 'Stopping after this page...' : '本页完成后停止...'} />
       <Toast show={showErrorToast} message={errorToastMessage} />
+
+      <LogPanel
+        logs={logs}
+        isOpen={isLogPanelOpen}
+        onToggle={() => setIsLogPanelOpen(prev => !prev)}
+        onClear={clearLogs}
+        lang={lang}
+      />
 
       <ComparisonModal
         viewingIndex={viewingIndex}

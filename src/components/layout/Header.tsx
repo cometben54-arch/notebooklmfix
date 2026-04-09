@@ -5,6 +5,10 @@ import { QuotaInfo } from '../../types';
 import { useArchive } from '../../hooks/useArchive';
 import { OnboardingTooltip } from '../ui/OnboardingTooltip';
 
+declare const __APP_VERSION__: string;
+declare const __BUILD_TIME__: string;
+const APP_VERSION = typeof __APP_VERSION__ !== 'undefined' ? `${__APP_VERSION__} (${__BUILD_TIME__})` : '2.4.0';
+
 interface HeaderProps {
     t: any;
     lang: 'en' | 'cn';
@@ -56,9 +60,14 @@ export const Header: React.FC<HeaderProps> = ({
                     <div className="flex items-center gap-3">
                         <Logo size="md" />
                         <div className="flex flex-col items-start text-left">
-                            <h1 className="text-lg md:text-xl font-heading font-bold bg-clip-text text-transparent bg-gradient-to-r from-indigo-600 to-purple-600 dark:from-indigo-400 dark:to-purple-400">
-                                {t.title}
-                            </h1>
+                            <div className="flex items-center gap-2">
+                                <h1 className="text-lg md:text-xl font-heading font-bold bg-clip-text text-transparent bg-gradient-to-r from-indigo-600 to-purple-600 dark:from-indigo-400 dark:to-purple-400">
+                                    {t.title}
+                                </h1>
+                                <span className="hidden md:inline text-[9px] font-mono-custom text-zinc-400 dark:text-zinc-600 bg-zinc-100 dark:bg-white/5 px-1.5 py-0.5 rounded">
+                                    v{APP_VERSION}
+                                </span>
+                            </div>
                             <p className="text-[10px] md:text-xs text-zinc-500 dark:text-zinc-400 font-medium tracking-wide">
                                 {t.subtitle}
                             </p>

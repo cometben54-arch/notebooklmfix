@@ -229,8 +229,8 @@ export default defineConfig(({ mode }) => {
       }
     ],
     define: {
-      // Security Fix: Do NOT inject GEMINI_API_KEY into client-side code
-      // 'process.env.API_KEY': ...
+      __APP_VERSION__: JSON.stringify('2.4.0'),
+      __BUILD_TIME__: JSON.stringify(new Date().toISOString().slice(0, 16).replace('T', ' ')),
     },
     resolve: {
       alias: {
