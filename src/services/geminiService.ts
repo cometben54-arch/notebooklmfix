@@ -300,23 +300,20 @@ export const processImageWithGemini = async (
     });
   }
 
-  // Call Google API via server-side relay (browser -> /api/relay -> Google)
-  const callViaRelay = async (prompt: string, imageBase64: string, maxRetries: number = 3): Promise<string> => {
+  // Call Google API via server-side relay with SSE streaming
+  // Streaming keeps connection alive, avoiding Cloudflare's 30s timeout
+  const callViaRelay = async (prompt: string, imageBase64: string, maxRetries: number = 2): Promise<string> => {
     let lastError = '';
     const payloadMB = (imageBase64.length * 0.75 / 1024 / 1024).toFixed(2);
 
-    // Try models in order: Flash (fast, ~5s) then Pro (slower, ~30s)
-    const models = ['gemini-2.0-flash-preview-image-generation', 'gemini-3-pro-image-preview'];
-
     for (let attempt = 1; attempt <= maxRetries; attempt++) {
-      const model = attempt <= 2 ? models[0] : models[1]; // Try flash first, then pro
       try {
         const res = await fetch('/api/relay', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             apiKey: localKey,
-            model,
+            model: 'gemini-3-pro-image-preview',
             contents: {
               parts: [
                 { text: prompt },
@@ -330,47 +327,49 @@ export const processImageWithGemini = async (
           }),
         });
 
-        // Check if response is actually JSON (not HTML error page)
+        // Handle error responses (JSON)
         const contentType = res.headers.get('content-type') || '';
-        if (!contentType.includes('application/json')) {
-          const text = await res.text();
-          lastError = `[${payloadMB}MB] /api/relay returned ${contentType || 'HTML'} (status ${res.status}). Relay function may not be deployed. First 100 chars: ${text.substring(0, 100)}`;
+        if (contentType.includes('application/json')) {
+          const data = await res.json();
+          lastError = `[${payloadMB}MB] HTTP ${res.status}: ${data.error || 'Unknown'}`;
           if (attempt < maxRetries) { await new Promise(r => setTimeout(r, 3000)); continue; }
           throw new Error(lastError);
         }
 
-        const data = await res.json();
+        // Parse SSE stream from relay (Google's streamGenerateContent response)
+        const sseText = await res.text();
+        const lines = sseText.split('\n');
+        let imageData = '';
+        let modelText = '';
 
-        if (!res.ok) {
-          lastError = `[${payloadMB}MB] HTTP ${res.status}: ${data.error || 'Unknown error'}${data.detail ? ' | ' + JSON.stringify(data.detail).substring(0, 200) : ''}`;
-          if (attempt < maxRetries) { await new Promise(r => setTimeout(r, 3000)); continue; }
-          throw new Error(lastError);
+        for (const line of lines) {
+          if (!line.startsWith('data: ')) continue;
+          try {
+            const chunk = JSON.parse(line.slice(6));
+            const parts = chunk.candidates?.[0]?.content?.parts || [];
+            for (const part of parts) {
+              if (part.inlineData?.data) {
+                imageData = part.inlineData.data;
+              }
+              if (part.text) {
+                modelText += part.text;
+              }
+            }
+          } catch { /* skip unparseable lines */ }
         }
 
-        // Extract image from Google API response
-        const parts = data.candidates?.[0]?.content?.parts || [];
-        for (const part of parts) {
-          if (part.inlineData && part.inlineData.data) {
-            return part.inlineData.data;
-          }
+        if (imageData) {
+          return imageData;
         }
 
-        // No image — diagnostic
-        const candidate = data.candidates?.[0];
-        const textContent = parts.filter((p: any) => p.text).map((p: any) => p.text).join(' ').substring(0, 200);
-        lastError = [
-          `payload=${payloadMB}MB`,
-          `candidates=${data.candidates?.length || 0}`,
-          `finish=${candidate?.finishReason || 'NONE'}`,
-          `block=${data.promptFeedback?.blockReason || 'none'}`,
-          textContent ? `text="${textContent}"` : 'no text',
-        ].join(' | ');
-
+        // No image found in stream
+        lastError = `[${payloadMB}MB] No image in stream. ${modelText ? `Model: "${modelText.substring(0, 200)}"` : 'Empty response'}`;
         if (attempt < maxRetries) { await new Promise(r => setTimeout(r, 2000)); continue; }
+
       } catch (err: any) {
-        if (err.message === lastError) throw err; // already formatted
         const msg = err?.message || String(err);
-        lastError = `[${payloadMB}MB] ${msg}`;
+        if (msg.includes('HTTP')) { lastError = msg; }
+        else { lastError = `[${payloadMB}MB] ${msg}`; }
         if (attempt < maxRetries) { await new Promise(r => setTimeout(r, 3000)); continue; }
       }
     }

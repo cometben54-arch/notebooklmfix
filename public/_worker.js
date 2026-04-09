@@ -1,16 +1,15 @@
 // Cloudflare Pages Advanced Mode: _worker.js
 // Handles /api/relay route + serves static assets for everything else
+// Uses streaming API to avoid Cloudflare's 30s timeout
 
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
 
-    // Handle /api/relay — proxy to Google Generative AI API
     if (url.pathname === '/api/relay' && request.method === 'POST') {
       return handleRelay(request);
     }
 
-    // All other requests: serve static assets
     return env.ASSETS.fetch(request);
   }
 };
@@ -23,8 +22,9 @@ async function handleRelay(request) {
       return jsonResponse({ error: 'Invalid API key' }, 400);
     }
 
-    // Build Google REST API request
-    const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
+    // Use streamGenerateContent with SSE — first chunk arrives in ~1-2s,
+    // keeping the Cloudflare Worker alive (no 30s timeout)
+    const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${model}:streamGenerateContent?alt=sse&key=${apiKey}`;
 
     const generationConfig = {
       responseModalities: ['TEXT', 'IMAGE'],
@@ -51,16 +51,23 @@ async function handleRelay(request) {
       body: JSON.stringify(body),
     });
 
-    const data = await response.json();
-
     if (!response.ok) {
+      const errData = await response.json().catch(() => ({}));
       return jsonResponse({
-        error: data.error?.message || `Google API error ${response.status}`,
-        detail: data.error,
+        error: errData.error?.message || `Google API error ${response.status}`,
+        detail: errData.error,
       }, response.status);
     }
 
-    return jsonResponse(data, 200);
+    // Stream Google's SSE response directly to client — keeps connection alive
+    return new Response(response.body, {
+      status: 200,
+      headers: {
+        'Content-Type': 'text/event-stream',
+        'Cache-Control': 'no-cache',
+        'Access-Control-Allow-Origin': '*',
+      },
+    });
 
   } catch (error) {
     return jsonResponse({ error: error.message || 'Relay error' }, 500);
