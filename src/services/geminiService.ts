@@ -280,14 +280,8 @@ export const processImageWithGemini = async (
 
   const ai = new GoogleGenAI({ apiKey: localKey });
   const aspectRatio = getClosestAspectRatio(width, height);
-
-  // Compress large input images to prevent API failures
   const inputSizeMB = (cleanBase64.length * 0.75) / (1024 * 1024);
-  console.log(`[Input] Original: ${width}x${height}, base64: ${inputSizeMB.toFixed(2)}MB`);
-  if (width > 1536 || height > 1536 || inputSizeMB > 3) {
-    console.log("[Input] Image too large, compressing for API...");
-    cleanBase64 = await compressForApi(cleanBase64, 1536);
-  }
+  console.log(`[Input] ${width}x${height}, ${inputSizeMB.toFixed(2)}MB`);
 
   // Helper: call Gemini API with retry and diagnostics
   const callGemini = async (prompt: string, imageBase64: string, maxRetries: number = 2): Promise<string> => {
