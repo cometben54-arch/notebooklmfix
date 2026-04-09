@@ -3,6 +3,9 @@
         "api/proxy.js": {
             "maxDuration": 60
         },
+        "api/relay.js": {
+            "maxDuration": 120
+        },
         "api/verify-code.js": {
             "maxDuration": 10
         }

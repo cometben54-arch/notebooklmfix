@@ -271,23 +271,18 @@ export const processImageWithGemini = async (
     }
   }
 
-  // --- STANDARD MODE (Direct API Key) ---
+  // --- STANDARD MODE (via server relay to bypass network restrictions) ---
   const localKey = localStorage.getItem('gemini_api_key_local');
 
   if (!localKey) {
     throw new Error("No API Key found. Please configure your key in settings.");
   }
 
-  const ai = new GoogleGenAI({ apiKey: localKey });
   const aspectRatio = getClosestAspectRatio(width, height);
-  const inputSizeMB = (cleanBase64.length * 0.75) / (1024 * 1024);
-  console.log(`[Input] ${width}x${height}, ${inputSizeMB.toFixed(2)}MB (PNG)`);
 
-  // Convert to JPEG at same resolution to reduce payload size
-  // PNG 1536x2752 ≈ 10-15MB, JPEG same resolution ≈ 1-3MB
-  // This does NOT reduce resolution — only changes format
+  // Convert large PNG to JPEG (same resolution) to reduce transfer size
+  const inputSizeMB = (cleanBase64.length * 0.75) / (1024 * 1024);
   if (inputSizeMB > 3) {
-    console.log(`[Input] Payload too large for fetch. Converting to JPEG (same resolution)...`);
     cleanBase64 = await new Promise<string>((resolve) => {
       const img = new Image();
       img.onload = () => {
@@ -298,101 +293,85 @@ export const processImageWithGemini = async (
         ctx.fillStyle = '#FFFFFF';
         ctx.fillRect(0, 0, img.width, img.height);
         ctx.drawImage(img, 0, 0);
-        const jpeg = canvas.toDataURL('image/jpeg', 0.92).replace(/^data:image\/jpeg;base64,/, '');
-        const newMB = (jpeg.length * 0.75 / 1024 / 1024).toFixed(2);
-        console.log(`[Input] Converted: ${img.width}x${img.height}, ${newMB}MB (JPEG 92%)`);
-        resolve(jpeg);
+        resolve(canvas.toDataURL('image/jpeg', 0.92).replace(/^data:image\/jpeg;base64,/, ''));
       };
       img.onerror = () => resolve(cleanBase64);
       img.src = `data:image/png;base64,${cleanBase64}`;
     });
   }
 
-  // Core API call with retry and full diagnostics
-  const callGemini = async (prompt: string, imageBase64: string, size: '2K' | '4K', maxRetries: number = 2): Promise<string> => {
-    let lastDiag = '';
+  // Call Google API via server-side relay (browser -> /api/relay -> Google)
+  const callViaRelay = async (prompt: string, imageBase64: string, maxRetries: number = 2): Promise<string> => {
+    let lastError = '';
     const payloadMB = (imageBase64.length * 0.75 / 1024 / 1024).toFixed(2);
 
     for (let attempt = 1; attempt <= maxRetries; attempt++) {
-      let response;
       try {
-        response = await ai.models.generateContent({
-          model: 'gemini-3-pro-image-preview',
-          contents: {
-            parts: [
-              { text: prompt },
-              {
-                inlineData: {
-                  mimeType: 'image/png',
-                  data: imageBase64,
-                },
-              },
-            ],
-          },
-          config: {
-            systemInstruction: SYSTEM_PROMPT,
-            imageConfig: {
-              aspectRatio: aspectRatio,
-              imageSize: size,
-            }
-          },
+        const res = await fetch('/api/relay', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            apiKey: localKey,
+            model: 'gemini-3-pro-image-preview',
+            contents: {
+              parts: [
+                { text: prompt },
+                { inlineData: { mimeType: 'image/png', data: imageBase64 } },
+              ],
+            },
+            config: {
+              systemInstruction: SYSTEM_PROMPT,
+              imageConfig: { aspectRatio, imageSize: '2K' },
+            },
+          }),
         });
-      } catch (fetchErr: any) {
-        const msg = fetchErr?.message || fetchErr?.toString() || 'Unknown';
-        if (attempt < maxRetries) {
-          await new Promise(r => setTimeout(r, 3000));
-          continue;
+
+        const data = await res.json();
+
+        if (!res.ok) {
+          lastError = `[${payloadMB}MB] HTTP ${res.status}: ${data.error || 'Unknown error'}${data.detail ? ' | ' + JSON.stringify(data.detail).substring(0, 200) : ''}`;
+          if (attempt < maxRetries) { await new Promise(r => setTimeout(r, 3000)); continue; }
+          throw new Error(lastError);
         }
-        throw new Error(`[payload=${payloadMB}MB] ${fetchErr?.constructor?.name}: ${msg}`);
-      }
 
-      // Build diagnostic string from the full response
-      const candidate = response.candidates?.[0];
-      const finishReason = candidate?.finishReason || 'NONE';
-      const parts = candidate?.content?.parts || [];
-      const nCandidates = response.candidates?.length || 0;
-
-      // Check for image in response
-      for (const part of parts) {
-        if (part.inlineData && part.inlineData.data) {
-          return part.inlineData.data;
+        // Extract image from Google API response
+        const parts = data.candidates?.[0]?.content?.parts || [];
+        for (const part of parts) {
+          if (part.inlineData && part.inlineData.data) {
+            return part.inlineData.data;
+          }
         }
-      }
 
-      // No image — build detailed diagnostic
-      const textContent = parts.filter((p: any) => p.text).map((p: any) => p.text).join(' ').substring(0, 200);
-      const safetyInfo = candidate?.safetyRatings
-        ? candidate.safetyRatings.map((r: any) => `${r.category}:${r.probability}`).join(', ')
-        : 'none';
-      const blockReason = (response as any).promptFeedback?.blockReason || 'none';
+        // No image — diagnostic
+        const candidate = data.candidates?.[0];
+        const textContent = parts.filter((p: any) => p.text).map((p: any) => p.text).join(' ').substring(0, 200);
+        lastError = [
+          `payload=${payloadMB}MB`,
+          `candidates=${data.candidates?.length || 0}`,
+          `finish=${candidate?.finishReason || 'NONE'}`,
+          `block=${data.promptFeedback?.blockReason || 'none'}`,
+          textContent ? `text="${textContent}"` : 'no text',
+        ].join(' | ');
 
-      lastDiag = [
-        `payload=${payloadMB}MB`,
-        `candidates=${nCandidates}`,
-        `finishReason=${finishReason}`,
-        `blockReason=${blockReason}`,
-        `safety=[${safetyInfo}]`,
-        textContent ? `text="${textContent}"` : 'no text',
-      ].join(' | ');
-
-      if (attempt < maxRetries) {
-        await new Promise(r => setTimeout(r, 2000));
+        if (attempt < maxRetries) { await new Promise(r => setTimeout(r, 2000)); continue; }
+      } catch (err: any) {
+        if (err.message === lastError) throw err; // already formatted
+        const msg = err?.message || String(err);
+        lastError = `[${payloadMB}MB] ${msg}`;
+        if (attempt < maxRetries) { await new Promise(r => setTimeout(r, 3000)); continue; }
       }
     }
 
-    throw new Error(`No image generated. Diagnostic: ${lastDiag}`);
+    throw new Error(`No image generated. ${lastError}`);
   };
 
   try {
     if (imageSize === '4K') {
-      // 4K: generate at 2K, then upscale to 4K
-      console.log("[4K] Generating at 2K, will upscale...");
-      const base64 = await callGemini(USER_PROMPT, cleanBase64, '2K', 2);
-      console.log("[4K] Upscaling to 4K dimensions...");
+      const base64 = await callViaRelay(USER_PROMPT, cleanBase64, 2);
       const image4k = await upscaleTo4K(`data:image/png;base64,${base64}`, width, height);
       return { image: image4k };
     } else {
-      const base64 = await callGemini(USER_PROMPT, cleanBase64, '2K', 2);
+      const base64 = await callViaRelay(USER_PROMPT, cleanBase64, 2);
       return { image: `data:image/png;base64,${base64}` };
     }
   } catch (error) {
