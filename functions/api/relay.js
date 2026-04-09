@@ -1,6 +1,6 @@
 // Cloudflare Pages Function: /api/relay
 // Routes Google Generative AI requests through server to bypass network restrictions
-// Browser -> /api/relay (Cloudflare) -> Google API -> response back
+// Browser -> /api/relay (Cloudflare edge) -> Google API -> response back
 
 export async function onRequest(context) {
     const { request } = context;
@@ -22,14 +22,22 @@ export async function onRequest(context) {
             });
         }
 
-        // Build Google REST API request
+        // Build Google REST API request body
+        // Reference: https://ai.google.dev/gemini-api/docs/image-generation
         const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
+
+        const generationConfig = {
+            responseModalities: ['TEXT', 'IMAGE'],
+        };
+
+        // imageConfig (aspectRatio, imageSize) goes inside generationConfig
+        if (config?.imageConfig) {
+            generationConfig.imageConfig = config.imageConfig;
+        }
 
         const body = {
             contents: Array.isArray(contents) ? contents : [contents],
-            generationConfig: {
-                responseModalities: ['TEXT', 'IMAGE'],
-            },
+            generationConfig,
         };
 
         if (config?.systemInstruction) {

@@ -26,12 +26,17 @@ export default async function handler(req, res) {
         // Build the Google API request
         const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
 
-        // Transform config to Google API format
+        const generationConfig = {
+            responseModalities: ['TEXT', 'IMAGE'],
+        };
+
+        if (genConfig?.imageConfig) {
+            generationConfig.imageConfig = genConfig.imageConfig;
+        }
+
         const body = {
             contents: Array.isArray(contents) ? contents : [contents],
-            generationConfig: {
-                responseModalities: ['TEXT', 'IMAGE'],
-            },
+            generationConfig,
         };
 
         if (genConfig?.systemInstruction) {
