@@ -313,9 +313,12 @@ export const processImageWithGemini = async (
     let lastTextResponse = '';
 
     for (let attempt = 1; attempt <= maxRetries; attempt++) {
-      console.log(`[Gemini] Attempt ${attempt}/${maxRetries} (${size})...`);
+      const payloadMB = (imageBase64.length * 0.75 / 1024 / 1024).toFixed(2);
+      console.log(`[Gemini] Attempt ${attempt}/${maxRetries} (${size}), payload: ${payloadMB}MB`);
 
-      const response = await ai.models.generateContent({
+      let response;
+      try {
+        response = await ai.models.generateContent({
         model: 'gemini-3-pro-image-preview',
         contents: {
           parts: [
@@ -336,6 +339,15 @@ export const processImageWithGemini = async (
           }
         },
       });
+      } catch (fetchErr: any) {
+        const msg = fetchErr?.message || fetchErr?.toString() || 'Unknown fetch error';
+        console.error(`[Gemini] Fetch failed (attempt ${attempt}): ${msg}`);
+        if (attempt < maxRetries) {
+          await new Promise(r => setTimeout(r, 3000));
+          continue;
+        }
+        throw new Error(`exception ${fetchErr?.constructor?.name || 'Error'}: ${msg}`);
+      }
 
       // Diagnostic: log what the API returned
       const parts = response.candidates?.[0]?.content?.parts || [];

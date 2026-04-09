@@ -1,5 +1,5 @@
-import React, { useRef, useEffect } from 'react';
-import { X, ChevronDown, ChevronUp, AlertTriangle, CheckCircle, Loader2, Info } from 'lucide-react';
+import React, { useRef, useEffect, useState } from 'react';
+import { ChevronDown, ChevronUp, AlertTriangle, CheckCircle, Info, Copy, Check } from 'lucide-react';
 
 export interface LogEntry {
     id: number;
@@ -35,8 +35,20 @@ const levelColor: Record<LogEntry['level'], string> = {
 
 export const LogPanel: React.FC<LogPanelProps> = ({ logs, isOpen, onToggle, onClear, lang }) => {
     const scrollRef = useRef<HTMLDivElement>(null);
+    const [copied, setCopied] = useState(false);
     const errorCount = logs.filter(l => l.level === 'error').length;
     const warnCount = logs.filter(l => l.level === 'warn').length;
+
+    const copyLogs = () => {
+        const text = logs.map(l => {
+            const time = l.timestamp.toLocaleTimeString('zh-CN', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' });
+            const prefix = l.level.toUpperCase().padEnd(7);
+            return `[${time}] ${prefix} ${l.message}${l.detail ? '\n' + l.detail : ''}`;
+        }).join('\n');
+        navigator.clipboard.writeText(text);
+        setCopied(true);
+        setTimeout(() => setCopied(false), 2000);
+    };
 
     // Auto-scroll to bottom when new log arrives
     useEffect(() => {
@@ -76,12 +88,22 @@ export const LogPanel: React.FC<LogPanelProps> = ({ logs, isOpen, onToggle, onCl
                     </div>
                     <div className="flex items-center gap-2">
                         {isOpen && logs.length > 0 && (
-                            <span
-                                onClick={(e) => { e.stopPropagation(); onClear(); }}
-                                className="text-zinc-500 hover:text-zinc-300 cursor-pointer"
-                            >
-                                {lang === 'en' ? 'Clear' : '清除'}
-                            </span>
+                            <>
+                                <span
+                                    onClick={(e) => { e.stopPropagation(); copyLogs(); }}
+                                    className="text-zinc-500 hover:text-zinc-300 cursor-pointer flex items-center gap-1"
+                                >
+                                    {copied ? <Check className="w-3 h-3 text-emerald-400" /> : <Copy className="w-3 h-3" />}
+                                    {copied ? (lang === 'en' ? 'Copied' : '已复制') : (lang === 'en' ? 'Copy' : '复制')}
+                                </span>
+                                <span className="text-zinc-700">|</span>
+                                <span
+                                    onClick={(e) => { e.stopPropagation(); onClear(); }}
+                                    className="text-zinc-500 hover:text-zinc-300 cursor-pointer"
+                                >
+                                    {lang === 'en' ? 'Clear' : '清除'}
+                                </span>
+                            </>
                         )}
                         {isOpen ? <ChevronDown className="w-4 h-4" /> : <ChevronUp className="w-4 h-4" />}
                     </div>
