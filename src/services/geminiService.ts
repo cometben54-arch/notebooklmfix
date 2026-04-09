@@ -326,6 +326,15 @@ export const processImageWithGemini = async (
           }),
         });
 
+        // Check if response is actually JSON (not HTML error page)
+        const contentType = res.headers.get('content-type') || '';
+        if (!contentType.includes('application/json')) {
+          const text = await res.text();
+          lastError = `[${payloadMB}MB] /api/relay returned ${contentType || 'HTML'} (status ${res.status}). Relay function may not be deployed. First 100 chars: ${text.substring(0, 100)}`;
+          if (attempt < maxRetries) { await new Promise(r => setTimeout(r, 3000)); continue; }
+          throw new Error(lastError);
+        }
+
         const data = await res.json();
 
         if (!res.ok) {
