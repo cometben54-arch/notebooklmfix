@@ -308,80 +308,79 @@ export const processImageWithGemini = async (
     });
   }
 
-  // Core API call — matches the config that was proven to work for 2K
+  // Core API call with retry and full diagnostics
   const callGemini = async (prompt: string, imageBase64: string, size: '2K' | '4K', maxRetries: number = 2): Promise<string> => {
-    let lastTextResponse = '';
+    let lastDiag = '';
+    const payloadMB = (imageBase64.length * 0.75 / 1024 / 1024).toFixed(2);
 
     for (let attempt = 1; attempt <= maxRetries; attempt++) {
-      const payloadMB = (imageBase64.length * 0.75 / 1024 / 1024).toFixed(2);
-      console.log(`[Gemini] Attempt ${attempt}/${maxRetries} (${size}), payload: ${payloadMB}MB`);
-
       let response;
       try {
         response = await ai.models.generateContent({
-        model: 'gemini-3-pro-image-preview',
-        contents: {
-          parts: [
-            { text: prompt },
-            {
-              inlineData: {
-                mimeType: 'image/png',
-                data: imageBase64,
+          model: 'gemini-3-pro-image-preview',
+          contents: {
+            parts: [
+              { text: prompt },
+              {
+                inlineData: {
+                  mimeType: 'image/png',
+                  data: imageBase64,
+                },
               },
-            },
-          ],
-        },
-        config: {
-          systemInstruction: SYSTEM_PROMPT,
-          imageConfig: {
-            aspectRatio: aspectRatio,
-            imageSize: size,
-          }
-        },
-      });
+            ],
+          },
+          config: {
+            systemInstruction: SYSTEM_PROMPT,
+            imageConfig: {
+              aspectRatio: aspectRatio,
+              imageSize: size,
+            }
+          },
+        });
       } catch (fetchErr: any) {
-        const msg = fetchErr?.message || fetchErr?.toString() || 'Unknown fetch error';
-        console.error(`[Gemini] Fetch failed (attempt ${attempt}): ${msg}`);
+        const msg = fetchErr?.message || fetchErr?.toString() || 'Unknown';
         if (attempt < maxRetries) {
           await new Promise(r => setTimeout(r, 3000));
           continue;
         }
-        throw new Error(`exception ${fetchErr?.constructor?.name || 'Error'}: ${msg}`);
+        throw new Error(`[payload=${payloadMB}MB] ${fetchErr?.constructor?.name}: ${msg}`);
       }
 
-      // Diagnostic: log what the API returned
-      const parts = response.candidates?.[0]?.content?.parts || [];
-      const partTypes = parts.map((p: any) => {
-        if (p.inlineData?.data) return `IMAGE(${(p.inlineData.data.length * 0.75 / 1024).toFixed(0)}KB)`;
-        if (p.text) return `TEXT("${p.text.substring(0, 100)}")`;
-        return 'unknown';
-      });
-      console.log(`[Gemini] Response parts: [${partTypes.join(', ')}]`);
-
-      // Also log finishReason and safety
+      // Build diagnostic string from the full response
       const candidate = response.candidates?.[0];
-      if (candidate?.finishReason) console.log(`[Gemini] finishReason: ${candidate.finishReason}`);
+      const finishReason = candidate?.finishReason || 'NONE';
+      const parts = candidate?.content?.parts || [];
+      const nCandidates = response.candidates?.length || 0;
 
-      // Extract image from response
+      // Check for image in response
       for (const part of parts) {
         if (part.inlineData && part.inlineData.data) {
           return part.inlineData.data;
         }
       }
 
-      // No image — capture text for diagnostics
-      lastTextResponse = parts.filter((p: any) => p.text).map((p: any) => p.text).join('\n');
-      console.warn(`[Gemini] Attempt ${attempt}: No image. Model said: ${lastTextResponse.substring(0, 300)}`);
+      // No image — build detailed diagnostic
+      const textContent = parts.filter((p: any) => p.text).map((p: any) => p.text).join(' ').substring(0, 200);
+      const safetyInfo = candidate?.safetyRatings
+        ? candidate.safetyRatings.map((r: any) => `${r.category}:${r.probability}`).join(', ')
+        : 'none';
+      const blockReason = (response as any).promptFeedback?.blockReason || 'none';
+
+      lastDiag = [
+        `payload=${payloadMB}MB`,
+        `candidates=${nCandidates}`,
+        `finishReason=${finishReason}`,
+        `blockReason=${blockReason}`,
+        `safety=[${safetyInfo}]`,
+        textContent ? `text="${textContent}"` : 'no text',
+      ].join(' | ');
 
       if (attempt < maxRetries) {
         await new Promise(r => setTimeout(r, 2000));
       }
     }
 
-    const reason = lastTextResponse
-      ? `Model response: "${lastTextResponse.substring(0, 200)}"`
-      : 'Model returned empty response';
-    throw new Error(`No image generated. ${reason}`);
+    throw new Error(`No image generated. Diagnostic: ${lastDiag}`);
   };
 
   try {
