@@ -283,8 +283,18 @@ export const processImageWithGemini = async (
   const inputSizeMB = (cleanBase64.length * 0.75) / (1024 * 1024);
   console.log(`[Input] ${width}x${height}, ${inputSizeMB.toFixed(2)}MB`);
 
+  // Detect actual MIME type from base64 header
+  const detectMime = (b64: string): string => {
+    if (b64.startsWith('/9j/')) return 'image/jpeg';
+    if (b64.startsWith('iVBOR')) return 'image/png';
+    if (b64.startsWith('UklGR')) return 'image/webp';
+    return 'image/png';
+  };
+
   // Helper: call Gemini API with retry and diagnostics
   const callGemini = async (prompt: string, imageBase64: string, maxRetries: number = 2): Promise<string> => {
+    let lastTextResponse = '';
+
     for (let attempt = 1; attempt <= maxRetries; attempt++) {
       console.log(`[Gemini] Attempt ${attempt}/${maxRetries}...`);
 
@@ -295,7 +305,7 @@ export const processImageWithGemini = async (
             { text: prompt },
             {
               inlineData: {
-                mimeType: 'image/jpeg',
+                mimeType: detectMime(imageBase64),
                 data: imageBase64,
               },
             },
@@ -306,6 +316,7 @@ export const processImageWithGemini = async (
           systemInstruction: SYSTEM_PROMPT,
           imageConfig: {
             aspectRatio: aspectRatio,
+            imageSize: '2K',
           }
         },
       });
@@ -313,8 +324,8 @@ export const processImageWithGemini = async (
       // Diagnostic: log what the API returned
       const parts = response.candidates?.[0]?.content?.parts || [];
       const partTypes = parts.map((p: any) => {
-        if (p.inlineData?.data) return `image(${(p.inlineData.data.length * 0.75 / 1024).toFixed(0)}KB)`;
-        if (p.text) return `text(${p.text.substring(0, 80)}...)`;
+        if (p.inlineData?.data) return `IMAGE(${(p.inlineData.data.length * 0.75 / 1024).toFixed(0)}KB)`;
+        if (p.text) return `TEXT("${p.text.substring(0, 100)}")`;
         return 'unknown';
       });
       console.log(`[Gemini] Response parts: [${partTypes.join(', ')}]`);
@@ -326,17 +337,20 @@ export const processImageWithGemini = async (
         }
       }
 
-      // No image found - log text response for diagnostics
-      const textParts = parts.filter((p: any) => p.text).map((p: any) => p.text).join('\n');
-      console.warn(`[Gemini] Attempt ${attempt}: No image in response. Text: ${textParts.substring(0, 200)}`);
+      // No image - capture model's text response for error reporting
+      lastTextResponse = parts.filter((p: any) => p.text).map((p: any) => p.text).join('\n');
+      console.warn(`[Gemini] Attempt ${attempt}: No image. Model said: ${lastTextResponse.substring(0, 300)}`);
 
       if (attempt < maxRetries) {
-        console.log(`[Gemini] Retrying in 2s...`);
         await new Promise(r => setTimeout(r, 2000));
       }
     }
 
-    throw new Error("No image generated after retries. The model returned text instead of an image. Try again or use 2K mode.");
+    // Include the model's text response in the error so user can see WHY it failed
+    const reason = lastTextResponse
+      ? `Model response: "${lastTextResponse.substring(0, 150)}"`
+      : 'Model returned empty response';
+    throw new Error(`No image generated. ${reason}`);
   };
 
   try {
