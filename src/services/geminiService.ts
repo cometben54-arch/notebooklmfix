@@ -2,7 +2,11 @@ import { GoogleGenAI } from "@google/genai";
 
 import { SYSTEM_PROMPT, USER_PROMPT, ENHANCE_4K_PROMPT } from '../constants/prompts';
 
-// Helper to calculate closest aspect ratio supported by Gemini image generation
+// Tile-based processing constants
+const TILE_SIZE = 768;   // Each tile dimension
+const TILE_PADDING = 96; // Extra context around each tile to avoid edge artifacts
+
+// Helper to calculate closest aspect ratio
 const getClosestAspectRatio = (width: number, height: number): string => {
   const ratio = width / height;
   const supported = [
@@ -12,102 +16,78 @@ const getClosestAspectRatio = (width: number, height: number): string => {
     { label: "9:16", value: 0.5625 },
     { label: "16:9", value: 1.77 },
   ];
-
-  const closest = supported.reduce((prev, curr) => {
-    return Math.abs(curr.value - ratio) < Math.abs(prev.value - ratio) ? curr : prev;
-  });
-
-  return closest.label;
+  return supported.reduce((prev, curr) =>
+    Math.abs(curr.value - ratio) < Math.abs(prev.value - ratio) ? curr : prev
+  ).label;
 };
 
-// Compress an image to fit within maxDim while maintaining aspect ratio
-const compressForApi = (base64: string, maxDim: number = 1536): Promise<string> => {
-  return new Promise((resolve) => {
-    const img = new Image();
-    img.onload = () => {
-      let w = img.width;
-      let h = img.height;
-
-      // Only resize if exceeding maxDim
-      if (w <= maxDim && h <= maxDim) {
-        resolve(base64);
-        return;
-      }
-
-      if (w > h) {
-        h = Math.round((h * maxDim) / w);
-        w = maxDim;
-      } else {
-        w = Math.round((w * maxDim) / h);
-        h = maxDim;
-      }
-
-      const canvas = document.createElement('canvas');
-      canvas.width = w;
-      canvas.height = h;
-      const ctx = canvas.getContext('2d');
-      if (ctx) {
-        ctx.fillStyle = '#FFFFFF';
-        ctx.fillRect(0, 0, w, h);
-        ctx.imageSmoothingEnabled = true;
-        ctx.imageSmoothingQuality = 'high';
-        ctx.drawImage(img, 0, 0, w, h);
-        const compressed = canvas.toDataURL('image/jpeg', 0.85).replace(/^data:image\/jpeg;base64,/, "");
-        const sizeMB = (compressed.length * 0.75 / 1024 / 1024).toFixed(2);
-        console.log(`[Compress] ${img.width}x${img.height} -> ${w}x${h} (${sizeMB}MB)`);
-        resolve(compressed);
-      } else {
-        resolve(base64);
-      }
-    };
-    img.onerror = () => resolve(base64);
-    img.src = base64.startsWith('data:') ? base64 : `data:image/png;base64,${base64}`;
-  });
-};
-
-// Client-side upscale: scale a base64 image to 4K dimensions
-const upscaleTo4K = (base64Image: string, originalWidth: number, originalHeight: number): Promise<string> => {
+// Load a base64 image into an HTMLImageElement
+const loadImage = (src: string): Promise<HTMLImageElement> => {
   return new Promise((resolve, reject) => {
     const img = new Image();
-    img.onload = () => {
-      const MAX_4K = 3840;
-      let targetW = originalWidth;
-      let targetH = originalHeight;
-      const scale = Math.min(MAX_4K / targetW, MAX_4K / targetH);
-      if (scale > 1) {
-        targetW = Math.round(targetW * scale);
-        targetH = Math.round(targetH * scale);
-      }
-
-      // Two-pass upscaling for better quality
-      const midCanvas = document.createElement('canvas');
-      const midW = img.width * 2;
-      const midH = img.height * 2;
-      midCanvas.width = midW;
-      midCanvas.height = midH;
-      const midCtx = midCanvas.getContext('2d');
-      if (midCtx) {
-        midCtx.imageSmoothingEnabled = true;
-        midCtx.imageSmoothingQuality = 'high';
-        midCtx.drawImage(img, 0, 0, midW, midH);
-      }
-
-      const canvas = document.createElement('canvas');
-      canvas.width = targetW;
-      canvas.height = targetH;
-      const ctx = canvas.getContext('2d');
-      if (ctx) {
-        ctx.imageSmoothingEnabled = true;
-        ctx.imageSmoothingQuality = 'high';
-        ctx.drawImage(midCanvas, 0, 0, targetW, targetH);
-        resolve(canvas.toDataURL('image/png'));
-      } else {
-        reject(new Error('Canvas context failed'));
-      }
-    };
-    img.onerror = () => reject(new Error('Image load failed during upscale'));
-    img.src = base64Image;
+    img.onload = () => resolve(img);
+    img.onerror = reject;
+    img.src = src.startsWith('data:') ? src : `data:image/png;base64,${src}`;
   });
+};
+
+// Extract a tile from an image with padding for context
+const extractTile = (
+  img: HTMLImageElement,
+  tileX: number, tileY: number,
+  tileW: number, tileH: number,
+  fullW: number, fullH: number
+): { base64: string; padLeft: number; padTop: number; outW: number; outH: number } => {
+  // Add padding (clamp to image bounds)
+  const srcX = Math.max(0, tileX - TILE_PADDING);
+  const srcY = Math.max(0, tileY - TILE_PADDING);
+  const srcRight = Math.min(fullW, tileX + tileW + TILE_PADDING);
+  const srcBottom = Math.min(fullH, tileY + tileH + TILE_PADDING);
+  const srcW = srcRight - srcX;
+  const srcH = srcBottom - srcY;
+
+  const canvas = document.createElement('canvas');
+  canvas.width = srcW;
+  canvas.height = srcH;
+  const ctx = canvas.getContext('2d')!;
+  ctx.fillStyle = '#FFFFFF';
+  ctx.fillRect(0, 0, srcW, srcH);
+  ctx.drawImage(img, srcX, srcY, srcW, srcH, 0, 0, srcW, srcH);
+
+  return {
+    base64: canvas.toDataURL('image/png').replace(/^data:image\/png;base64,/, ''),
+    padLeft: tileX - srcX,
+    padTop: tileY - srcY,
+    outW: tileW,
+    outH: tileH,
+  };
+};
+
+// Crop padding from a processed tile and return just the tile area
+const cropTile = async (
+  tileBase64: string,
+  padLeft: number, padTop: number,
+  tileW: number, tileH: number,
+  inputW: number, inputH: number
+): Promise<string> => {
+  const img = await loadImage(`data:image/png;base64,${tileBase64}`);
+
+  // The API output might be different size than input, calculate scale
+  const scaleX = img.width / inputW;
+  const scaleY = img.height / inputH;
+
+  const cropX = Math.round(padLeft * scaleX);
+  const cropY = Math.round(padTop * scaleY);
+  const cropW = Math.round(tileW * scaleX);
+  const cropH = Math.round(tileH * scaleY);
+
+  const canvas = document.createElement('canvas');
+  canvas.width = cropW;
+  canvas.height = cropH;
+  const ctx = canvas.getContext('2d')!;
+  ctx.drawImage(img, cropX, cropY, cropW, cropH, 0, 0, cropW, cropH);
+
+  return canvas.toDataURL('image/png').replace(/^data:image\/png;base64,/, '');
 };
 
 export const checkApiKeySelection = async (): Promise<boolean> => {
@@ -377,12 +357,75 @@ export const processImageWithGemini = async (
     throw new Error(`No image generated. ${lastError}`);
   };
 
+  // Decide whether to use tile-based processing
+  const imageArea = width * height;
+  const useTiling = imageArea > 1200 * 1200; // Tile for images larger than ~1.4MP
+
   try {
-    if (imageSize === '4K') {
-      const base64 = await callViaRelay(USER_PROMPT, cleanBase64, 2);
-      const image4k = await upscaleTo4K(`data:image/png;base64,${base64}`, width, height);
-      return { image: image4k };
+    if (useTiling) {
+      // === TILE-BASED PROCESSING ===
+      // Split large image into small tiles, process each individually
+      // Each tile gets the model's full attention for text clarity
+      console.log(`[Tiling] Image ${width}x${height} — using tile-based processing`);
+
+      const sourceImg = await loadImage(`data:image/png;base64,${cleanBase64}`);
+      const cols = Math.ceil(width / TILE_SIZE);
+      const rows = Math.ceil(height / TILE_SIZE);
+      const tileW = Math.ceil(width / cols);
+      const tileH = Math.ceil(height / rows);
+      const totalTiles = cols * rows;
+
+      console.log(`[Tiling] Grid: ${cols}x${rows} = ${totalTiles} tiles (${tileW}x${tileH} each)`);
+
+      // Process each tile
+      const processedTiles: { base64: string; x: number; y: number; w: number; h: number }[] = [];
+      const tilePrompt = `${USER_PROMPT}\n\nNote: This is a cropped section of a larger document. Focus on making every character in this section razor-sharp.`;
+
+      for (let row = 0; row < rows; row++) {
+        for (let col = 0; col < cols; col++) {
+          const tileIdx = row * cols + col + 1;
+          const tx = col * tileW;
+          const ty = row * tileH;
+          const tw = Math.min(tileW, width - tx);
+          const th = Math.min(tileH, height - ty);
+
+          console.log(`[Tiling] Processing tile ${tileIdx}/${totalTiles} (${tw}x${th})...`);
+
+          // Extract tile with padding
+          const { base64: tileBase64, padLeft, padTop, outW, outH } = extractTile(
+            sourceImg, tx, ty, tw, th, width, height
+          );
+          const paddedW = tw + padLeft + Math.min(TILE_PADDING, width - tx - tw);
+          const paddedH = th + padTop + Math.min(TILE_PADDING, height - ty - th);
+
+          // Process tile through API
+          const resultBase64 = await callViaRelay(tilePrompt, tileBase64, 2);
+
+          // Crop padding off the result
+          const croppedBase64 = await cropTile(resultBase64, padLeft, padTop, outW, outH, paddedW, paddedH);
+
+          processedTiles.push({ base64: croppedBase64, x: tx, y: ty, w: tw, h: th });
+        }
+      }
+
+      // Reassemble tiles into final image
+      console.log(`[Tiling] Reassembling ${totalTiles} tiles...`);
+      const outputCanvas = document.createElement('canvas');
+      outputCanvas.width = width;
+      outputCanvas.height = height;
+      const outputCtx = outputCanvas.getContext('2d')!;
+
+      for (const tile of processedTiles) {
+        const tileImg = await loadImage(`data:image/png;base64,${tile.base64}`);
+        outputCtx.drawImage(tileImg, 0, 0, tileImg.width, tileImg.height, tile.x, tile.y, tile.w, tile.h);
+      }
+
+      const resultDataUrl = outputCanvas.toDataURL('image/png');
+      console.log(`[Tiling] Complete!`);
+      return { image: resultDataUrl };
+
     } else {
+      // === SMALL IMAGE: process whole image at once ===
       const base64 = await callViaRelay(USER_PROMPT, cleanBase64, 2);
       return { image: `data:image/png;base64,${base64}` };
     }
