@@ -82,6 +82,7 @@ const App: React.FC = () => {
     retryPage,
     successCount,
     failCount,
+    tileProgress,
     logs,
     clearLogs
   } = useImageProcessing({
@@ -477,6 +478,7 @@ const App: React.FC = () => {
           handleDownloadSingleImage={handleDownloadSingleImage}
           currentProcessingIndex={currentProcessingIndex}
           resolution={resolution}
+          tileProgress={tileProgress}
           onRetryPage={retryPage}
         />
 

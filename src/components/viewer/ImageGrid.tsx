@@ -15,6 +15,7 @@ interface ImageGridProps {
     handleDownloadSingleImage: (page: ProcessedPage) => void;
     currentProcessingIndex: number | null;
     resolution: string;
+    tileProgress?: { current: number; total: number } | null;
     onRetryPage?: (index: number) => void;
 }
 
@@ -31,6 +32,7 @@ export const ImageGrid: React.FC<ImageGridProps> = ({
     handleDownloadSingleImage,
     currentProcessingIndex,
     resolution,
+    tileProgress,
     onRetryPage
 }) => {
     if (pages.length === 0) return null;
@@ -71,6 +73,7 @@ export const ImageGrid: React.FC<ImageGridProps> = ({
                         toggleSelection={toggleSelection}
                         setViewingIndex={setViewingIndex}
                         handleDownloadSingleImage={handleDownloadSingleImage}
+                        tileProgress={currentProcessingIndex === idx ? tileProgress : null}
                         onRetry={onRetryPage}
                     />
                 ))}

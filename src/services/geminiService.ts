@@ -114,11 +114,15 @@ export const promptForKeySelection = async (): Promise<void> => {
 
 import { QuotaInfo } from '../types';
 
+// Progress callback for tile-based processing
+export type TileProgressCallback = (current: number, total: number) => void;
+
 export const processImageWithGemini = async (
   base64Image: string,
   width: number,
   height: number,
-  imageSize: '2K' | '4K' = '2K'
+  imageSize: '2K' | '4K' = '2K',
+  onTileProgress?: TileProgressCallback
 ): Promise<{ image: string; quota?: QuotaInfo }> => {
   // Check for Access Code first (Proxy Mode)
   const accessCode = localStorage.getItem('gemini_access_code');
@@ -377,9 +381,12 @@ export const processImageWithGemini = async (
 
       console.log(`[Tiling] Grid: ${cols}x${rows} = ${totalTiles} tiles (${tileW}x${tileH} each)`);
 
-      // Process each tile
+      // Process each tile with rate limiting
       const processedTiles: { base64: string; x: number; y: number; w: number; h: number }[] = [];
       const tilePrompt = `${USER_PROMPT}\n\nNote: This is a cropped section of a larger document. Focus on making every character in this section razor-sharp.`;
+      const DELAY_BETWEEN_TILES_MS = 3000; // 3s delay between API calls to avoid rate limiting
+
+      onTileProgress?.(0, totalTiles); // Initial progress
 
       for (let row = 0; row < rows; row++) {
         for (let col = 0; col < cols; col++) {
@@ -389,7 +396,15 @@ export const processImageWithGemini = async (
           const tw = Math.min(tileW, width - tx);
           const th = Math.min(tileH, height - ty);
 
+          // Report progress to UI
+          onTileProgress?.(tileIdx, totalTiles);
           console.log(`[Tiling] Processing tile ${tileIdx}/${totalTiles} (${tw}x${th})...`);
+
+          // Rate limiting: wait between API calls (skip before first tile)
+          if (tileIdx > 1) {
+            console.log(`[Tiling] Waiting ${DELAY_BETWEEN_TILES_MS / 1000}s before next tile...`);
+            await new Promise(r => setTimeout(r, DELAY_BETWEEN_TILES_MS));
+          }
 
           // Extract tile with padding
           const { base64: tileBase64, padLeft, padTop, outW, outH } = extractTile(

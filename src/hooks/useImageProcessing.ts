@@ -1,6 +1,6 @@
 import { useState, useRef, useCallback } from 'react';
 import { ProcessedPage, QuotaInfo } from '../types';
-import { processImageWithGemini } from '../services/geminiService';
+import { processImageWithGemini, TileProgressCallback } from '../services/geminiService';
 import { AuthMode } from './useAuth';
 import { saveToArchive } from '../db/archive';
 import { LogEntry } from '../components/ui/LogPanel';
@@ -45,6 +45,9 @@ export function useImageProcessing({
     // Error Toast State
     const [showErrorToast, setShowErrorToast] = useState(false);
     const [errorToastMessage, setErrorToastMessage] = useState('');
+
+    // Tile progress State
+    const [tileProgress, setTileProgress] = useState<{ current: number; total: number } | null>(null);
 
     // Log State
     const [logs, setLogs] = useState<LogEntry[]>([]);
@@ -120,14 +123,23 @@ export function useImageProcessing({
 
             const pageLabel = `Page ${newPages[i].pageIndex + 1}`;
             addLog('info', `${pageLabel}: Starting ${resolution} enhancement (${newPages[i].width}x${newPages[i].height})`);
+            setTileProgress(null);
             const startTime = Date.now();
 
             try {
+                const onTileProgress: TileProgressCallback = (current, total) => {
+                    setTileProgress({ current, total });
+                    if (current > 0) {
+                        addLog('info', `${pageLabel}: Tile ${current}/${total} processing...`);
+                    }
+                };
+
                 const result = await processImageWithGemini(
                     newPages[i].originalUrl,
                     newPages[i].width,
                     newPages[i].height,
-                    resolution
+                    resolution,
+                    onTileProgress
                 );
 
                 const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
@@ -173,6 +185,7 @@ export function useImageProcessing({
         setResolutionLocked(false);
         setIsStopping(false);
         setCurrentProcessingIndex(null);
+        setTileProgress(null);
 
         // 5. Completion Check
         const selectedPages = newPages.filter(p => p.selected);
@@ -236,6 +249,7 @@ export function useImageProcessing({
         showStoppingToast,
         showErrorToast,
         errorToastMessage,
+        tileProgress,
         startProcessing,
         stopProcessing,
         retryPage,

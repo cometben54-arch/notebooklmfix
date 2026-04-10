@@ -19,6 +19,7 @@ interface ImageCardProps {
     toggleSelection: (index: number) => void;
     setViewingIndex: (index: number) => void;
     handleDownloadSingleImage: (page: ProcessedPage) => void;
+    tileProgress?: { current: number; total: number } | null;
     onRetry?: (index: number) => void;
 }
 
@@ -33,6 +34,7 @@ export const ImageCard: React.FC<ImageCardProps> = ({
     toggleSelection,
     setViewingIndex,
     handleDownloadSingleImage,
+    tileProgress,
     onRetry
 }) => {
     // No animation logic needed here anymore
@@ -115,16 +117,33 @@ export const ImageCard: React.FC<ImageCardProps> = ({
             {/* Processing Overlay */}
             {page.status === 'processing' && (
                 <div className="absolute inset-0 z-30 overflow-hidden rounded-2xl">
-                    {/* Subtle Darkening (much lighter than before) */}
                     <div className="absolute inset-0 bg-black/10 dark:bg-black/20 backdrop-blur-[1px]"></div>
-
-                    {/* Shimmer / Scanning Light Effect */}
                     <div className="absolute inset-0 -translate-x-full animate-[shimmer_2s_infinite] bg-gradient-to-r from-transparent via-white/20 to-transparent skew-x-12"></div>
 
-                    {/* Status Text (Minimalist) */}
-                    <div className="absolute bottom-4 left-0 right-0 flex flex-col items-center justify-center gap-1">
+                    {/* Tile progress bar */}
+                    {tileProgress && tileProgress.total > 1 && (
+                        <div className="absolute top-0 left-0 right-0 h-1 bg-black/20">
+                            <div
+                                className="h-full bg-indigo-500 transition-all duration-700 ease-out"
+                                style={{ width: `${(tileProgress.current / tileProgress.total) * 100}%` }}
+                            />
+                        </div>
+                    )}
+
+                    <div className="absolute bottom-4 left-0 right-0 flex flex-col items-center justify-center gap-1.5">
+                        {/* Tile progress info */}
+                        {tileProgress && tileProgress.total > 1 && (
+                            <div className="px-3 py-1.5 bg-black/50 backdrop-blur-md rounded-lg border border-white/10 shadow-lg text-center">
+                                <span className="text-white/80 text-[10px] font-mono-custom block">
+                                    {lang === 'en' ? 'Large image — processing in tiles' : '图片较大，正在分块处理'}
+                                </span>
+                                <span className="text-indigo-300 text-xs font-bold font-mono-custom">
+                                    {tileProgress.current} / {tileProgress.total}
+                                </span>
+                            </div>
+                        )}
+
                         <div className="flex items-center gap-2 px-3 py-1.5 bg-black/40 backdrop-blur-md rounded-full border border-white/10 shadow-lg">
-                            {/* Tiny breathing dot */}
                             <div className="w-1.5 h-1.5 bg-indigo-400 rounded-full animate-pulse"></div>
                             <span className="text-white/90 text-[10px] font-medium tracking-widest uppercase font-mono-custom">
                                 {t.enhancing}
