@@ -1,0 +1,5 @@
+# Cloudflare Workers configuration
+# Smart Placement: run Worker near the backend (Google API in US)
+# instead of near the user (China), avoiding "location not supported" errors
+[placement]
+mode = "smart"
