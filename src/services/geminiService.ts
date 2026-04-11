@@ -3,8 +3,7 @@ import { GoogleGenAI } from "@google/genai";
 import { SYSTEM_PROMPT, USER_PROMPT, ENHANCE_4K_PROMPT } from '../constants/prompts';
 
 // Tile-based processing constants
-const TILE_SIZE = 768;   // Each tile dimension
-const TILE_PADDING = 96; // Extra context around each tile to avoid edge artifacts
+const TILE_SIZE = 768;
 
 // Helper to calculate closest aspect ratio
 const getClosestAspectRatio = (width: number, height: number): string => {
@@ -31,63 +30,35 @@ const loadImage = (src: string): Promise<HTMLImageElement> => {
   });
 };
 
-// Extract a tile from an image with padding for context
+// Extract a tile from the source image (no padding — simple exact crop)
 const extractTile = (
   img: HTMLImageElement,
-  tileX: number, tileY: number,
-  tileW: number, tileH: number,
-  fullW: number, fullH: number
-): { base64: string; padLeft: number; padTop: number; outW: number; outH: number } => {
-  // Add padding (clamp to image bounds)
-  const srcX = Math.max(0, tileX - TILE_PADDING);
-  const srcY = Math.max(0, tileY - TILE_PADDING);
-  const srcRight = Math.min(fullW, tileX + tileW + TILE_PADDING);
-  const srcBottom = Math.min(fullH, tileY + tileH + TILE_PADDING);
-  const srcW = srcRight - srcX;
-  const srcH = srcBottom - srcY;
-
+  x: number, y: number, w: number, h: number
+): string => {
   const canvas = document.createElement('canvas');
-  canvas.width = srcW;
-  canvas.height = srcH;
+  canvas.width = w;
+  canvas.height = h;
   const ctx = canvas.getContext('2d')!;
   ctx.fillStyle = '#FFFFFF';
-  ctx.fillRect(0, 0, srcW, srcH);
-  ctx.drawImage(img, srcX, srcY, srcW, srcH, 0, 0, srcW, srcH);
-
-  return {
-    base64: canvas.toDataURL('image/png').replace(/^data:image\/png;base64,/, ''),
-    padLeft: tileX - srcX,
-    padTop: tileY - srcY,
-    outW: tileW,
-    outH: tileH,
-  };
+  ctx.fillRect(0, 0, w, h);
+  ctx.drawImage(img, x, y, w, h, 0, 0, w, h);
+  return canvas.toDataURL('image/png').replace(/^data:image\/png;base64,/, '');
 };
 
-// Crop padding from a processed tile and return just the tile area
-const cropTile = async (
-  tileBase64: string,
-  padLeft: number, padTop: number,
-  tileW: number, tileH: number,
-  inputW: number, inputH: number
-): Promise<string> => {
-  const img = await loadImage(`data:image/png;base64,${tileBase64}`);
-
-  // The API output might be different size than input, calculate scale
-  const scaleX = img.width / inputW;
-  const scaleY = img.height / inputH;
-
-  const cropX = Math.round(padLeft * scaleX);
-  const cropY = Math.round(padTop * scaleY);
-  const cropW = Math.round(tileW * scaleX);
-  const cropH = Math.round(tileH * scaleY);
-
+// Resize an API result to exact target dimensions
+const resizeToExact = async (base64: string, targetW: number, targetH: number): Promise<HTMLImageElement> => {
+  const img = await loadImage(`data:image/png;base64,${base64}`);
+  // If already correct size, return as-is
+  if (img.width === targetW && img.height === targetH) return img;
+  // Resize via canvas
   const canvas = document.createElement('canvas');
-  canvas.width = cropW;
-  canvas.height = cropH;
+  canvas.width = targetW;
+  canvas.height = targetH;
   const ctx = canvas.getContext('2d')!;
-  ctx.drawImage(img, cropX, cropY, cropW, cropH, 0, 0, cropW, cropH);
-
-  return canvas.toDataURL('image/png').replace(/^data:image\/png;base64,/, '');
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = 'high';
+  ctx.drawImage(img, 0, 0, targetW, targetH);
+  return loadImage(canvas.toDataURL('image/png'));
 };
 
 export const checkApiKeySelection = async (): Promise<boolean> => {
@@ -285,10 +256,10 @@ export const processImageWithGemini = async (
   }
 
   // Call Google API via server-side relay with SSE streaming
-  // Streaming keeps connection alive, avoiding Cloudflare's 30s timeout
-  const callViaRelay = async (prompt: string, imageBase64: string, maxRetries: number = 3): Promise<string> => {
+  const callViaRelay = async (prompt: string, imageBase64: string, maxRetries: number = 3, tileAspectRatio?: string): Promise<string> => {
     let lastError = '';
     const payloadMB = (imageBase64.length * 0.75 / 1024 / 1024).toFixed(2);
+    const ar = tileAspectRatio || aspectRatio; // Use tile-specific AR if provided
 
     for (let attempt = 1; attempt <= maxRetries; attempt++) {
       try {
@@ -306,7 +277,7 @@ export const processImageWithGemini = async (
             },
             config: {
               systemInstruction: SYSTEM_PROMPT,
-              imageConfig: { aspectRatio, imageSize: '2K' },
+              imageConfig: { aspectRatio: ar, imageSize: '2K' },
             },
           }),
         });
@@ -388,11 +359,16 @@ export const processImageWithGemini = async (
       console.log(`[Tiling] Grid: ${cols}x${rows} = ${totalTiles} tiles (${tileW}x${tileH} each)`);
 
       // Process each tile with rate limiting
-      const processedTiles: { base64: string; x: number; y: number; w: number; h: number }[] = [];
-      const tilePrompt = `${USER_PROMPT}\n\nNote: This is a cropped section of a larger document. Focus on making every character in this section razor-sharp.`;
-      const DELAY_BETWEEN_TILES_MS = 3000; // 3s delay between API calls to avoid rate limiting
+      const tilePrompt = `${USER_PROMPT}\n\nThis is a cropped section of a larger document. Focus on making every character razor-sharp.`;
+      const DELAY_MS = 3000;
 
-      onTileProgress?.(0, totalTiles); // Initial progress
+      onTileProgress?.(0, totalTiles);
+
+      // Output canvas — assemble tiles directly onto it
+      const outputCanvas = document.createElement('canvas');
+      outputCanvas.width = width;
+      outputCanvas.height = height;
+      const outputCtx = outputCanvas.getContext('2d')!;
 
       for (let row = 0; row < rows; row++) {
         for (let col = 0; col < cols; col++) {
@@ -402,43 +378,30 @@ export const processImageWithGemini = async (
           const tw = Math.min(tileW, width - tx);
           const th = Math.min(tileH, height - ty);
 
-          // Report progress to UI
           onTileProgress?.(tileIdx, totalTiles);
-          console.log(`[Tiling] Processing tile ${tileIdx}/${totalTiles} (${tw}x${th})...`);
+          console.log(`[Tiling] Tile ${tileIdx}/${totalTiles}: pos(${tx},${ty}) size(${tw}x${th})`);
 
-          // Rate limiting: wait between API calls (skip before first tile)
+          // Rate limiting between API calls
           if (tileIdx > 1) {
-            console.log(`[Tiling] Waiting ${DELAY_BETWEEN_TILES_MS / 1000}s before next tile...`);
-            await new Promise(r => setTimeout(r, DELAY_BETWEEN_TILES_MS));
+            await new Promise(r => setTimeout(r, DELAY_MS));
           }
 
-          // Extract tile with padding
-          const { base64: tileBase64, padLeft, padTop, outW, outH } = extractTile(
-            sourceImg, tx, ty, tw, th, width, height
-          );
-          const paddedW = tw + padLeft + Math.min(TILE_PADDING, width - tx - tw);
-          const paddedH = th + padTop + Math.min(TILE_PADDING, height - ty - th);
+          // 1. Extract exact tile (no padding)
+          const tileBase64 = extractTile(sourceImg, tx, ty, tw, th);
 
-          // Process tile through API
-          const resultBase64 = await callViaRelay(tilePrompt, tileBase64, 2);
+          // 2. Calculate THIS tile's aspect ratio (critical!)
+          const tileAR = getClosestAspectRatio(tw, th);
+          console.log(`[Tiling] Tile AR: ${tileAR} (${tw}x${th})`);
 
-          // Crop padding off the result
-          const croppedBase64 = await cropTile(resultBase64, padLeft, padTop, outW, outH, paddedW, paddedH);
+          // 3. Process through API with tile-specific aspect ratio
+          const resultBase64 = await callViaRelay(tilePrompt, tileBase64, 3, tileAR);
 
-          processedTiles.push({ base64: croppedBase64, x: tx, y: ty, w: tw, h: th });
+          // 4. Resize API output to exactly match tile dimensions
+          const resizedImg = await resizeToExact(resultBase64, tw, th);
+
+          // 5. Place tile at exact position on output canvas
+          outputCtx.drawImage(resizedImg, tx, ty);
         }
-      }
-
-      // Reassemble tiles into final image
-      console.log(`[Tiling] Reassembling ${totalTiles} tiles...`);
-      const outputCanvas = document.createElement('canvas');
-      outputCanvas.width = width;
-      outputCanvas.height = height;
-      const outputCtx = outputCanvas.getContext('2d')!;
-
-      for (const tile of processedTiles) {
-        const tileImg = await loadImage(`data:image/png;base64,${tile.base64}`);
-        outputCtx.drawImage(tileImg, 0, 0, tileImg.width, tileImg.height, tile.x, tile.y, tile.w, tile.h);
       }
 
       const resultDataUrl = outputCanvas.toDataURL('image/png');
