@@ -286,7 +286,7 @@ export const processImageWithGemini = async (
 
   // Call Google API via server-side relay with SSE streaming
   // Streaming keeps connection alive, avoiding Cloudflare's 30s timeout
-  const callViaRelay = async (prompt: string, imageBase64: string, maxRetries: number = 2): Promise<string> => {
+  const callViaRelay = async (prompt: string, imageBase64: string, maxRetries: number = 3): Promise<string> => {
     let lastError = '';
     const payloadMB = (imageBase64.length * 0.75 / 1024 / 1024).toFixed(2);
 
@@ -315,7 +315,13 @@ export const processImageWithGemini = async (
         const contentType = res.headers.get('content-type') || '';
         if (contentType.includes('application/json')) {
           const data = await res.json();
-          lastError = `[${payloadMB}MB] HTTP ${res.status}: ${data.error || 'Unknown'}`;
+          const errMsg = data.error || 'Unknown';
+          // Location error — tell user to enable Smart Placement
+          if (errMsg.includes('location is not supported')) {
+            lastError = `[${payloadMB}MB] Google API rejected: region not supported. Please enable Smart Placement in Cloudflare Dashboard → Pages → Settings → Functions → Placement`;
+          } else {
+            lastError = `[${payloadMB}MB] HTTP ${res.status}: ${errMsg}`;
+          }
           if (attempt < maxRetries) { await new Promise(r => setTimeout(r, 3000)); continue; }
           throw new Error(lastError);
         }
