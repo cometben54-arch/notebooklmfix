@@ -2,9 +2,6 @@ import { GoogleGenAI } from "@google/genai";
 
 import { SYSTEM_PROMPT, USER_PROMPT, ENHANCE_4K_PROMPT } from '../constants/prompts';
 
-// Tile-based processing constants
-const TILE_SIZE = 768;
-
 // Helper to calculate closest aspect ratio
 const getClosestAspectRatio = (width: number, height: number): string => {
   const ratio = width / height;
@@ -338,25 +335,44 @@ export const processImageWithGemini = async (
     throw new Error(`No image generated. ${lastError}`);
   };
 
-  // Decide whether to use tile-based processing
+  // Decide tile strategy based on image size
+  // KEY: Use NxN grid (same divisor) so every tile has the same aspect ratio as the full image
+  // This is critical — if tile AR matches full image AR, the model output will match tile shape
   const imageArea = width * height;
-  const useTiling = imageArea > 1200 * 1200; // Tile for images larger than ~1.4MP
+  const longestSide = Math.max(width, height);
+
+  let divisor: number;
+  if (imageArea <= 1200 * 1200) {
+    divisor = 1; // Small image: no tiling (under ~1.4MP)
+  } else if (longestSide <= 2000) {
+    divisor = 2; // Medium: 2x2 = 4 tiles
+  } else if (longestSide <= 3200) {
+    divisor = 3; // Large: 3x3 = 9 tiles
+  } else {
+    divisor = 4; // Very large: 4x4 = 16 tiles
+  }
+
+  const useTiling = divisor > 1;
 
   try {
     if (useTiling) {
-      // === TILE-BASED PROCESSING ===
-      // Split large image into small tiles, process each individually
-      // Each tile gets the model's full attention for text clarity
-      console.log(`[Tiling] Image ${width}x${height} — using tile-based processing`);
+      console.log(`[Tiling] Image ${width}x${height} — ${divisor}x${divisor} grid = ${divisor * divisor} tiles`);
 
       const sourceImg = await loadImage(`data:image/png;base64,${cleanBase64}`);
-      const cols = Math.ceil(width / TILE_SIZE);
-      const rows = Math.ceil(height / TILE_SIZE);
-      const tileW = Math.ceil(width / cols);
-      const tileH = Math.ceil(height / rows);
+      const cols = divisor;
+      const rows = divisor;
       const totalTiles = cols * rows;
 
-      console.log(`[Tiling] Grid: ${cols}x${rows} = ${totalTiles} tiles (${tileW}x${tileH} each)`);
+      // Compute integer boundaries so tiles cover the full image with no gaps
+      const xBoundaries: number[] = [];
+      const yBoundaries: number[] = [];
+      for (let i = 0; i <= cols; i++) xBoundaries.push(Math.round((i * width) / cols));
+      for (let i = 0; i <= rows; i++) yBoundaries.push(Math.round((i * height) / rows));
+
+      // All tiles have the same aspect ratio as the full image
+      // (because we divide both dimensions by the same number)
+      const unifiedAspectRatio = getClosestAspectRatio(width, height);
+      console.log(`[Tiling] Unified aspect ratio: ${unifiedAspectRatio} (from ${width}x${height})`);
 
       // Process each tile with rate limiting
       const tilePrompt = `${USER_PROMPT}\n\nThis is a cropped section of a larger document. Focus on making every character razor-sharp.`;
@@ -373,10 +389,12 @@ export const processImageWithGemini = async (
       for (let row = 0; row < rows; row++) {
         for (let col = 0; col < cols; col++) {
           const tileIdx = row * cols + col + 1;
-          const tx = col * tileW;
-          const ty = row * tileH;
-          const tw = Math.min(tileW, width - tx);
-          const th = Math.min(tileH, height - ty);
+
+          // Use integer boundaries for exact gap-free coverage
+          const tx = xBoundaries[col];
+          const ty = yBoundaries[row];
+          const tw = xBoundaries[col + 1] - tx;
+          const th = yBoundaries[row + 1] - ty;
 
           onTileProgress?.(tileIdx, totalTiles);
           console.log(`[Tiling] Tile ${tileIdx}/${totalTiles}: pos(${tx},${ty}) size(${tw}x${th})`);
@@ -389,12 +407,9 @@ export const processImageWithGemini = async (
           // 1. Extract exact tile (no padding)
           const tileBase64 = extractTile(sourceImg, tx, ty, tw, th);
 
-          // 2. Calculate THIS tile's aspect ratio (critical!)
-          const tileAR = getClosestAspectRatio(tw, th);
-          console.log(`[Tiling] Tile AR: ${tileAR} (${tw}x${th})`);
-
-          // 3. Process through API with tile-specific aspect ratio
-          const resultBase64 = await callViaRelay(tilePrompt, tileBase64, 3, tileAR);
+          // 2. Use unified aspect ratio (same as full image since NxN grid)
+          // 3. Process through API
+          const resultBase64 = await callViaRelay(tilePrompt, tileBase64, 3, unifiedAspectRatio);
 
           // 4. Resize API output to exactly match tile dimensions
           const resizedImg = await resizeToExact(resultBase64, tw, th);
