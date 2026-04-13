@@ -166,11 +166,18 @@ export function useImageProcessing({
                 console.error(`${pageLabel} Error:`, error);
                 newPages[i].status = 'error';
 
-                // Extract meaningful error message
                 const errMsg = error?.message || error?.toString() || 'Unknown error';
                 const errDetail = extractErrorDetail(error);
 
                 addLog('error', `${pageLabel}: Failed after ${elapsed}s — ${errMsg}`, errDetail);
+
+                // Quota/billing error — abort entire batch
+                if (error?.isQuotaError) {
+                    addLog('error', '⛔ Quota exceeded — aborting all remaining pages. Please check your Google AI Studio billing at https://ai.studio/spend');
+                    triggerErrorToast('⛔ 配额用完，已停止处理。请到 Google AI Studio 检查账单。');
+                    setPages([...newPages]);
+                    break;
+                }
 
                 if (!showErrorToast) {
                     triggerErrorToast(`${pageLabel} failed: ${errMsg}`);

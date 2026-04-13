@@ -284,6 +284,15 @@ export const processImageWithGemini = async (
         if (contentType.includes('application/json')) {
           const data = await res.json();
           const errMsg = data.error || 'Unknown';
+
+          // Quota/billing errors — abort all processing immediately
+          const isQuotaError = res.status === 429 || errMsg.includes('spending cap') || errMsg.includes('quota') || errMsg.includes('RESOURCE_EXHAUSTED');
+          if (isQuotaError) {
+            const quotaErr: any = new Error(`QUOTA_EXCEEDED: ${errMsg}`);
+            quotaErr.isQuotaError = true;
+            throw quotaErr;
+          }
+
           // Location error — tell user to enable Smart Placement
           if (errMsg.includes('location is not supported')) {
             lastError = `[${payloadMB}MB] Google API rejected: region not supported. Please enable Smart Placement in Cloudflare Dashboard → Pages → Settings → Functions → Placement`;
@@ -325,6 +334,9 @@ export const processImageWithGemini = async (
         if (attempt < maxRetries) { await new Promise(r => setTimeout(r, 2000)); continue; }
 
       } catch (err: any) {
+        // Re-throw quota errors immediately without retry
+        if (err?.isQuotaError) throw err;
+
         const msg = err?.message || String(err);
         if (msg.includes('HTTP')) { lastError = msg; }
         else { lastError = `[${payloadMB}MB] ${msg}`; }
