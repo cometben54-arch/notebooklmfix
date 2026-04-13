@@ -347,24 +347,25 @@ export const processImageWithGemini = async (
     throw new Error(`No image generated. ${lastError}`);
   };
 
-  // Decide tile strategy based on image size
-  // KEY: Use NxN grid (same divisor) so every tile has the same aspect ratio as the full image
-  // This is critical — if tile AR matches full image AR, the model output will match tile shape
+  // Quality mode — default ECONOMY (single image call, ~5-10% cost of tile mode)
+  // Users can opt into FINE mode via localStorage for best text clarity at higher cost
+  const qualityMode = localStorage.getItem('quality_mode') || 'economy'; // 'economy' | 'fine'
   const imageArea = width * height;
   const longestSide = Math.max(width, height);
 
   let divisor: number;
-  if (imageArea <= 1200 * 1200) {
-    divisor = 1; // Small image: no tiling (under ~1.4MP)
+  if (qualityMode === 'economy' || imageArea <= 1200 * 1200) {
+    divisor = 1; // Economy mode or small image: single call
   } else if (longestSide <= 2000) {
-    divisor = 2; // Medium: 2x2 = 4 tiles
+    divisor = 2; // Fine mode - medium: 2x2 = 4 tiles
   } else if (longestSide <= 3200) {
-    divisor = 3; // Large: 3x3 = 9 tiles
+    divisor = 3; // Fine mode - large: 3x3 = 9 tiles
   } else {
-    divisor = 4; // Very large: 4x4 = 16 tiles
+    divisor = 4; // Fine mode - very large: 4x4 = 16 tiles
   }
 
   const useTiling = divisor > 1;
+  console.log(`[Mode] ${qualityMode}, tiling=${useTiling}${useTiling ? ` (${divisor}x${divisor})` : ''}`);
 
   try {
     if (useTiling) {

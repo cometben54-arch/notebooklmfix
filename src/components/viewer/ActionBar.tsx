@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import {
     Play,
     Square,
@@ -61,6 +61,15 @@ export const ActionBar: React.FC<ActionBarProps> = ({
     handleDownloadZip,
     uploadMode
 }) => {
+    // Quality mode: economy (single call) vs fine (tile-based)
+    const [qualityMode, setQualityMode] = useState<'economy' | 'fine'>(() => {
+        return (localStorage.getItem('quality_mode') as 'economy' | 'fine') || 'economy';
+    });
+
+    useEffect(() => {
+        localStorage.setItem('quality_mode', qualityMode);
+    }, [qualityMode]);
+
     if (pages.length === 0) return null;
 
     return (
@@ -91,6 +100,38 @@ export const ActionBar: React.FC<ActionBarProps> = ({
 
             {/* Controls */}
             <div className="flex items-center gap-3">
+
+                {/* Quality Mode Switcher */}
+                {!resolutionLocked && completedCount < pages.length && (
+                    <div className="hidden sm:flex items-center bg-zinc-100 dark:bg-white/5 p-1 rounded-xl border border-zinc-200 dark:border-white/10 mr-2 group/mode relative">
+                        <button
+                            onClick={() => setQualityMode('economy')}
+                            className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${qualityMode === 'economy'
+                                ? 'bg-emerald-500 text-white shadow-sm'
+                                : 'text-zinc-500 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-200'
+                                }`}
+                        >
+                            {lang === 'en' ? 'Economy' : '经济'}
+                        </button>
+                        <div className="w-px h-4 bg-zinc-200 dark:bg-white/10 mx-1"></div>
+                        <button
+                            onClick={() => setQualityMode('fine')}
+                            className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${qualityMode === 'fine'
+                                ? 'bg-amber-500 text-white shadow-sm'
+                                : 'text-zinc-500 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-200'
+                                }`}
+                        >
+                            {lang === 'en' ? 'Fine' : '精细'}
+                        </button>
+                        {/* Tooltip */}
+                        <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-3 px-3 py-2 bg-zinc-900 dark:bg-zinc-800 text-white text-[10px] rounded-lg whitespace-nowrap opacity-0 group-hover/mode:opacity-100 transition-opacity pointer-events-none shadow-xl border border-white/10 z-50 text-center">
+                            {qualityMode === 'economy'
+                                ? (lang === 'en' ? 'Single AI call per page · Low cost' : '每页1次API调用 · 低成本')
+                                : (lang === 'en' ? 'Tile-based · ~9x cost · Best text clarity' : '分块处理 · ~9倍成本 · 文字最清晰')}
+                            <div className="absolute top-full left-1/2 -translate-x-1/2 -mt-1 border-4 border-transparent border-t-zinc-900 dark:border-t-zinc-800"></div>
+                        </div>
+                    </div>
+                )}
 
                 {/* Resolution Switcher (Only show if not locked) */}
                 {!resolutionLocked && completedCount < pages.length && (
